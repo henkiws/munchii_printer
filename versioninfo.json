@@ -1,0 +1,37 @@
+{
+    "FixedFileInfo": {
+        "FileVersion": {
+            "Major": 1, "Minor": 0, "Patch": 0, "Build": 0
+        },
+        "ProductVersion": {
+            "Major": 1, "Minor": 0, "Patch": 0, "Build": 0
+        },
+        "FileFlagsMask": "3f",
+        "FileFlags": "00",
+        "FileOS": "040004",
+        "FileType": "01",
+        "FileSubType": "00"
+    },
+    "StringFileInfo": {
+        "Comments": "",
+        "CompanyName": "Munchii",
+        "FileDescription": "Munchii Printer - ESC/POS Network Printer Manager",
+        "FileVersion": "1.0.0.0",
+        "InternalName": "munchii-printer",
+        "LegalCopyright": "Copyright © 2025 Munchii",
+        "LegalTrademarks": "",
+        "OriginalFilename": "munchii-printer.exe",
+        "PrivateBuild": "",
+        "ProductName": "Munchii Printer",
+        "ProductVersion": "1.0.0.0",
+        "SpecialBuild": ""
+    },
+    "VarFileInfo": {
+        "Translation": {
+            "LangID": "0409",
+            "CharsetID": "04B0"
+        }
+    },
+    "IconPath": "icon.ico",
+    "ManifestPath": "app.manifest"
+}
