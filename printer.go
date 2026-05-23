@@ -39,47 +39,69 @@ type EscPrinter struct {
 	buf  []byte
 }
 
-// newPrinterFromConfig opens the right connection based on ConnType
+// newPrinterFromConfig membuka koneksi printer sesuai conn_type.
+// Mendukung: network (TCP), bluetooth (COM), usb (COM / Windows Printer).
 func newPrinterFromConfig(cfg PrinterConfig) (*EscPrinter, error) {
-	switch cfg.GetConnType() {
+	connType := cfg.GetConnType()
+	logStatus(fmt.Sprintf("INFO [%s] Membuka koneksi printer — type=%s conn=%s",
+		cfg.PrinterName, connType, cfg.ConnSummary()))
+
+	switch connType {
 	case ConnNetwork:
-		return newNetworkPrinter(cfg.PrinterIPAddress, cfg.GetPort())
+		p, err := newNetworkPrinter(cfg.PrinterIPAddress, cfg.GetPort())
+		if err != nil {
+			return nil, fmt.Errorf("network [%s:%d]: %w", cfg.PrinterIPAddress, cfg.GetPort(), err)
+		}
+		return p, nil
+
 	case ConnBluetooth, ConnUSB:
 		if cfg.WindowsPrinter != "" {
-			return newWindowsPrinter(cfg.WindowsPrinter)
+			p, err := newWindowsPrinter(cfg.WindowsPrinter)
+			if err != nil {
+				return nil, fmt.Errorf("windows printer [%s]: %w", cfg.WindowsPrinter, err)
+			}
+			return p, nil
 		}
-		return newCOMPrinter(cfg.COMPort, cfg.GetBaudRate())
+		p, err := newCOMPrinter(cfg.COMPort, cfg.GetBaudRate())
+		if err != nil {
+			return nil, fmt.Errorf("%s COM [%s@%d]: %w", connType, cfg.COMPort, cfg.GetBaudRate(), err)
+		}
+		return p, nil
+
 	default:
-		return newNetworkPrinter(cfg.PrinterIPAddress, cfg.GetPort())
+		return nil, fmt.Errorf("conn_type tidak dikenal: %q (gunakan: network | bluetooth | usb)", connType)
 	}
 }
 
-// newNetworkPrinter connects via TCP
+// newNetworkPrinter konek via TCP ke IP:port printer.
 func newNetworkPrinter(ip string, port int) (*EscPrinter, error) {
+	if ip == "" {
+		return nil, fmt.Errorf("IP address kosong")
+	}
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("cannot connect to printer %s: %w", addr, err)
+		return nil, fmt.Errorf("TCP dial %s gagal: %w", addr, err)
 	}
 	return &EscPrinter{conn: conn}, nil
 }
 
-// newCOMPrinter opens a serial COM port (Bluetooth SPP or USB-Serial)
+// newCOMPrinter buka serial COM port (Bluetooth SPP atau USB-Serial).
 func newCOMPrinter(comPort string, baudRate int) (*EscPrinter, error) {
 	if comPort == "" {
-		return nil, fmt.Errorf("COM port not specified")
+		return nil, fmt.Errorf("COM port tidak diisi")
 	}
 	conn, err := openCOMPort(comPort, baudRate)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open %s: %w", comPort, err)
+		return nil, fmt.Errorf("tidak bisa buka %s: %w", comPort, err)
 	}
 	return &EscPrinter{conn: conn}, nil
 }
 
-// newWindowsPrinter sends to a named Windows printer via RAW spooler
+// newWindowsPrinter kirim ke Windows printer name via RAW spooler.
 func newWindowsPrinter(printerName string) (*EscPrinter, error) {
 	if printerName == "" {
-		return nil, fmt.Errorf("windows printer name not specified")
+		return nil, fmt.Errorf("nama Windows printer kosong")
 	}
 	return &EscPrinter{conn: &winPrinterConn{name: printerName}}, nil
 }
@@ -94,10 +116,14 @@ func openCOMPort(port string, baud int) (*comConn, error) {
 	name := `\\.\` + port
 	f, err := os.OpenFile(name, os.O_RDWR, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("OpenFile %s: %w", name, err)
 	}
-	// Configure via Windows mode command (best-effort)
-	exec.Command("mode", fmt.Sprintf("%s:baud=%d parity=n data=8 stop=1", port, baud)).Run()
+	// Konfigurasi baud rate via Windows mode command (best-effort)
+	modeCmd := exec.Command("mode", fmt.Sprintf("%s:baud=%d parity=n data=8 stop=1", port, baud))
+	hideCmdWindow(modeCmd)
+	if out, err := modeCmd.CombinedOutput(); err != nil {
+		logStatus(fmt.Sprintf("WARN COM mode command gagal (non-fatal): %v — output: %s", err, string(out)))
+	}
 	return &comConn{file: f}, nil
 }
 
@@ -120,16 +146,24 @@ func (w *winPrinterConn) Write(b []byte) (int, error) {
 func (w *winPrinterConn) Close() error {
 	tmp, err := os.CreateTemp("", "escpos_*.bin")
 	if err != nil {
-		return err
+		return fmt.Errorf("gagal buat temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	tmp.Write(w.buf)
+	if _, err := tmp.Write(w.buf); err != nil {
+		tmp.Close()
+		return fmt.Errorf("gagal tulis temp file: %w", err)
+	}
 	tmp.Close()
-	cmd := exec.Command("cmd", "/c",
-		fmt.Sprintf(`copy /b "%s" "\\%%computername%%\%s"`, tmpPath, w.name))
-	err = cmd.Run()
+
+	copyCmd := fmt.Sprintf(`copy /b "%s" "\\%%computername%%\%s"`, tmpPath, w.name)
+	cmd := exec.Command("cmd", "/c", copyCmd)
+	hideCmdWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	os.Remove(tmpPath)
-	return err
+	if err != nil {
+		return fmt.Errorf("copy ke printer [%s] gagal: %w — output: %s", w.name, err, string(out))
+	}
+	return nil
 }
 
 // ── EscPrinter methods ────────────────────────────────────────────────────────
@@ -151,12 +185,21 @@ func (p *EscPrinter) feed()             { p.write(ESC_FEED) }
 func (p *EscPrinter) cut()              { p.write(ESC_CUT) }
 
 func (p *EscPrinter) flush() error {
+	if len(p.buf) == 0 {
+		return nil
+	}
 	_, err := p.conn.Write(p.buf)
 	p.buf = nil
-	return err
+	if err != nil {
+		return fmt.Errorf("flush gagal: %w", err)
+	}
+	return nil
 }
+
 func (p *EscPrinter) close() {
-	p.flush()
+	if err := p.flush(); err != nil {
+		logStatus("WARN flush saat close: " + err.Error())
+	}
 	p.conn.Close()
 }
 
@@ -165,32 +208,45 @@ func (p *EscPrinter) close() {
 func (p *EscPrinter) printImage(imgPath string) error {
 	f, err := os.Open(imgPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("buka file gambar [%s]: %w", imgPath, err)
 	}
 	defer f.Close()
+
 	img, err := png.Decode(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode PNG [%s]: %w", imgPath, err)
 	}
 	return p.bitImage(img)
 }
 
+// bitImage mengkonversi image.Image ke format ESC/POS bit-image dan
+// menambahkannya ke buffer printer.
 func (p *EscPrinter) bitImage(img image.Image) error {
 	bounds := img.Bounds()
 	width := bounds.Max.X
 	height := bounds.Max.Y
+
+	if width == 0 || height == 0 {
+		return fmt.Errorf("gambar kosong (%dx%d)", width, height)
+	}
+
 	byteWidth := int(math.Ceil(float64(width) / 8.0))
 	paddedWidth := byteWidth * 8
+
 	xL := byte(byteWidth & 0xFF)
 	xH := byte((byteWidth >> 8) & 0xFF)
 	yL := byte(height & 0xFF)
 	yH := byte((height >> 8) & 0xFF)
+
+	// ESC/POS GS v 0 command
 	p.write([]byte{0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH})
+
 	for y := 0; y < height; y++ {
 		row := make([]byte, byteWidth)
 		for x := 0; x < paddedWidth; x++ {
 			if x < width {
 				r, g, b, _ := img.At(x+bounds.Min.X, y+bounds.Min.Y).RGBA()
+				// Konversi ke grayscale luma
 				gray := (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)) / 257.0
 				if gray < 128 {
 					row[x/8] |= 1 << uint(7-x%8)
@@ -202,7 +258,7 @@ func (p *EscPrinter) bitImage(img image.Image) error {
 	return nil
 }
 
-// ── wkhtmltoimage ─────────────────────────────────────────────────────────────
+// ── wkhtmltoimage (dipertahankan untuk fallback / fitur lama) ─────────────────
 
 func getWkhtmlPath() string {
 	exe, err := os.Executable()
@@ -222,7 +278,7 @@ func renderURLtoPNG(sourceURL string, width int, destPath string) error {
 		"--quality", "100", "--format", "png", sourceURL, destPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("wkhtmltoimage failed: %w\nOutput: %s", err, string(out))
+		return fmt.Errorf("wkhtmltoimage gagal: %w\nOutput: %s", err, string(out))
 	}
 	return nil
 }
@@ -232,73 +288,97 @@ func getTempImagePath() string {
 	return filepath.Join(filepath.Dir(exe), "escpos_tmp.png")
 }
 
-// ── Main print job ────────────────────────────────────────────────────────────
+// ── Test Print ────────────────────────────────────────────────────────────────
 
-func processPrintJob(cfg PrinterConfig, apiResp *KypesenResponse) error {
-	data := apiResp.Response.Data
-	if len(data.Orders) == 0 {
-		return nil
-	}
-	printerInfo := data.Printer
-	paperSize := printerInfo.PrinterGroup.PrinterJob.PaperSize
-	templateName := strings.ToLower(printerInfo.PrinterGroup.PrinterJob.PrinterTemplate.Name)
-	width := 550
-	if paperSize == 58 {
-		width = 350
-	}
-	printer, err := newPrinterFromConfig(cfg)
+// sendTestPrint mencetak halaman test ke printer dengan ID tertentu.
+// Mendukung semua jenis koneksi: network, bluetooth, usb.
+func sendTestPrint(id int) error {
+	printers, err := loadPrinters()
 	if err != nil {
+		return fmt.Errorf("gagal load printers: %w", err)
+	}
+
+	var cfg *PrinterConfig
+	for i, p := range printers {
+		if p.ID == id {
+			cfg = &printers[i]
+			break
+		}
+	}
+	if cfg == nil {
+		return fmt.Errorf("printer ID %d tidak ditemukan", id)
+	}
+
+	logStatus(fmt.Sprintf("INFO [%s] Memulai test print — type=%s conn=%s",
+		cfg.PrinterName, cfg.GetConnType(), cfg.ConnSummary()))
+
+	p, err := newPrinterFromConfig(*cfg)
+	if err != nil {
+		logStatus(fmt.Sprintf("ERROR [%s] Test print gagal koneksi: %v", cfg.PrinterName, err))
 		return err
 	}
-	defer printer.close()
-	kypesenBaseURL := getKypesenBaseURL(cfg.ServerURL)
-	for _, orderWrapper := range data.Orders {
-		order := orderWrapper.Order
-		receiptNumber := order.GetReceiptNumber()
-		orderID := fmt.Sprintf("%d", order.ID)
-		if printerInfo.ID != orderWrapper.FkPrinter {
-			continue
-		}
-		var sourceURL string
-		if templateName == "kitchen" {
-			sourceURL = fmt.Sprintf("%sview/kitchen/order/%s?printer_group=%d",
-				kypesenBaseURL, orderID, printerInfo.PrinterGroup.ID)
-		} else {
-			sourceURL = fmt.Sprintf("%sview/invoice/cod/%s?printer_group=%d",
-				kypesenBaseURL, receiptNumber, printerInfo.PrinterGroup.ID)
-		}
-		destPath := getTempImagePath()
-		if err := renderURLtoPNG(sourceURL, width, destPath); err != nil {
-			logStatus(fmt.Sprintf("[%s] wkhtmltoimage error, fallback text: %v", cfg.PrinterName, err))
-			if templateName == "kitchen" {
-				printKitchenText(printer, orderWrapper, printerInfo, paperSize, "", orderWrapper.PrintCount > 1)
-			} else {
-				printCashierText(printer, orderWrapper, printerInfo, paperSize)
-			}
-			continue
-		}
-		if err := printer.printImage(destPath); err != nil {
-			return fmt.Errorf("printing image: %w", err)
-		}
-		printer.feed()
-		printer.feed()
-		printer.feed()
-		printer.cut()
-		os.Remove(destPath)
-	}
-	return printer.flush()
-}
+	defer p.close()
 
-func getKypesenBaseURL(serverURL string) string {
-	parts := strings.SplitN(serverURL, "/api/", 2)
-	if len(parts) == 2 {
-		return parts[0] + "/"
+	sep := "================================"
+	now := time.Now().In(time.FixedZone("WIB", 7*3600))
+
+	p.init()
+	p.alignCenter()
+	p.boldOn()
+	p.sizeDouble()
+	p.textln("TEST PRINT")
+	p.sizeNormal()
+	p.boldOff()
+	p.textln(sep)
+	p.textln("Kypesen Printer")
+	p.textln(sep)
+	p.alignLeft()
+	p.textln("Nama     : " + cfg.PrinterName)
+	p.textln("Tipe     : " + cfg.GetConnType())
+	p.textln("Koneksi  : " + cfg.ConnSummary())
+	p.textln(sep)
+	p.boldOn()
+	p.textln("Koneksi  : OK")
+	p.textln("ESC/POS  : OK")
+	p.boldOff()
+	p.textln(sep)
+
+	// Info tambahan per jenis koneksi
+	switch cfg.GetConnType() {
+	case ConnNetwork:
+		p.textln(fmt.Sprintf("IP Addr  : %s", cfg.PrinterIPAddress))
+		p.textln(fmt.Sprintf("Port     : %d", cfg.GetPort()))
+	case ConnBluetooth:
+		p.textln(fmt.Sprintf("COM Port : %s", cfg.COMPort))
+		p.textln(fmt.Sprintf("Baud Rate: %d", cfg.GetBaudRate()))
+		p.textln("Mode     : Bluetooth SPP")
+	case ConnUSB:
+		if cfg.WindowsPrinter != "" {
+			p.textln(fmt.Sprintf("Printer  : %s", cfg.WindowsPrinter))
+			p.textln("Mode     : Windows Printer (RAW)")
+		} else {
+			p.textln(fmt.Sprintf("COM Port : %s", cfg.COMPort))
+			p.textln(fmt.Sprintf("Baud Rate: %d", cfg.GetBaudRate()))
+			p.textln("Mode     : USB-Serial")
+		}
 	}
-	parts = strings.SplitN(serverURL, "/", 4)
-	if len(parts) >= 3 {
-		return parts[0] + "//" + parts[2] + "/"
+
+	p.textln(sep)
+	p.alignCenter()
+	p.textln(now.Format("02/01/2006 15:04:05"))
+	p.textln("WebSocket Mode — Real-Time")
+	p.feed()
+	p.feed()
+	p.feed()
+	p.cut()
+
+	if err := p.flush(); err != nil {
+		logStatus(fmt.Sprintf("ERROR [%s] Test print flush gagal: %v", cfg.PrinterName, err))
+		return err
 	}
-	return serverURL
+
+	logStatus(fmt.Sprintf("OK [%s] Test print berhasil dikirim via %s", cfg.PrinterName, cfg.ConnSummary()))
+	return nil
 }
 
 // ── Text fallback: Kitchen ────────────────────────────────────────────────────
@@ -416,53 +496,65 @@ func printCashierText(p *EscPrinter, ow OrderWrapper, pi PrinterInfo, paperSize 
 
 func formatNumber(f float64) string { return fmt.Sprintf("%.2f", f) }
 
-// ── Test Print ────────────────────────────────────────────────────────────────
+// ── Order helpers ─────────────────────────────────────────────────────────────
 
-func sendTestPrint(id int) error {
-	printers, err := loadPrinters()
-	if err != nil {
-		return err
+func (o Order) GetReceiptNumber() string {
+	if o.FkTableCod != nil {
+		return fmt.Sprintf("%d", *o.FkTableCod)
 	}
-	var cfg *PrinterConfig
-	for i, p := range printers {
-		if p.ID == id {
-			cfg = &printers[i]
-			break
-		}
+	return fmt.Sprintf("%d", o.ID)
+}
+
+func (o Order) GetCustomer() string {
+	if o.Name == "" {
+		return "Guest"
 	}
-	if cfg == nil {
-		return fmt.Errorf("printer id %d not found", id)
+	return o.Name
+}
+
+func (o Order) GetTableArea() string {
+	if o.Table != nil && o.Table.Restoarea != nil {
+		return o.Table.Restoarea.Name
 	}
-	p, err := newPrinterFromConfig(*cfg)
-	if err != nil {
-		return err
+	return "N/A"
+}
+
+func (o Order) GetTableName() string {
+	if o.Table != nil {
+		return o.Table.Name
 	}
-	defer p.close()
-	sep := "================================"
-	p.init()
-	p.alignCenter()
-	p.boldOn()
-	p.sizeDouble()
-	p.textln("TEST PRINT")
-	p.sizeNormal()
-	p.boldOff()
-	p.textln(sep)
-	p.textln("Munchii Printer")
-	p.textln("Name    : " + cfg.PrinterName)
-	p.textln("Type    : " + cfg.GetConnType())
-	p.textln("Connect : " + cfg.ConnSummary())
-	p.textln(fmt.Sprintf("Polling : %ds", cfg.GetPollingSeconds()))
-	p.textln(sep)
-	p.alignLeft()
-	p.textln("Connection: OK")
-	p.textln("ESC/POS:   OK")
-	p.textln("Printer configured correctly.")
-	p.textln(sep)
-	p.alignCenter()
-	p.textln(time.Now().Format("02/01/2006 15:04:05"))
-	p.feed()
-	p.feed()
-	p.feed()
-	p.cut()
-	return p.flush()
+	return "N/A"
+}
+
+func (o Order) GetOrderType() string {
+	switch o.DeliveryMethod {
+	case 3:
+		return "Dine-In"
+	case 2:
+		return "Pickup"
+	default:
+		return "Delivery"
+	}
+}
+
+func (o Order) GetTotal() float64 {
+	return o.DeliveryPrice + o.OrderPrice - o.TotalRefundPrice - o.OrderPriceCancel + o.SurchargeValue - o.DiscountValue
+}
+
+func (o Order) GetSubtotal() float64 {
+	return o.OrderPrice - o.Vatvalue - o.TotalRefundPrice
+}
+
+// ── getKypesenBaseURL ─────────────────────────────────────────────────────────
+
+func getKypesenBaseURL(serverURL string) string {
+	parts := strings.SplitN(serverURL, "/api/", 2)
+	if len(parts) == 2 {
+		return parts[0] + "/"
+	}
+	parts = strings.SplitN(serverURL, "/", 4)
+	if len(parts) >= 3 {
+		return parts[0] + "//" + parts[2] + "/"
+	}
+	return serverURL
 }

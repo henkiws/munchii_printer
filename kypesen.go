@@ -1,30 +1,43 @@
 package main
 
-import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
-)
+// ── Payload dari Go Hub (dikirim Laravel setelah generate image) ──────────────
+//
+// Format JSON yang diterima via WebSocket:
+// {
+//   "status":     "success",
+//   "from":       "order" | "note" | "reporting",
+//   "client_id":  "UUID-PRINTER",
+//   "ip_address": "192.168.1.100",
+//   "data": {
+//     "printer": { ... },
+//     "orders":  [ { "order": { ..., "image_base64": "data:image/png;base64,..." } } ]
+//     "notes":   [ { ..., "image_base64": "..." } ]
+//     "reports": [ { ..., "image_base64": "..." } ]
+//   }
+// }
 
-// ── Response structures ──────────────────────────────────────────────────────
-
-type KypesenResponse struct {
-	Response KypesenData `json:"response"`
+// HubPayload — root payload dari Go Hub
+type HubPayload struct {
+	Status    string      `json:"status"`
+	From      string      `json:"from"`       // "order" | "note" | "reporting"
+	ClientID  string      `json:"client_id"`  // UUID printer
+	IPAddress string      `json:"ip_address"` // IP printer fisik
+	Data      HubData     `json:"data"`
 }
 
-type KypesenData struct {
-	Data KypesenInner `json:"data"`
+// HubData — isi data tergantung from
+type HubData struct {
+	Printer PrinterInfo    `json:"printer"`
+	Orders  []OrderWrapper `json:"orders"`  // from=order
+	Notes   []NoteItem     `json:"notes"`   // from=note
+	Reports []ReportItem   `json:"reports"` // from=reporting
 }
 
-type KypesenInner struct {
-	Printer PrinterInfo   `json:"printer"`
-	Orders  []OrderWrapper `json:"orders"`
-}
+// ── Printer info ──────────────────────────────────────────────────────────────
 
 type PrinterInfo struct {
 	ID           int          `json:"id"`
+	IPAddress    string       `json:"ip_address"`
 	PrinterGroup PrinterGroup `json:"printer_group"`
 }
 
@@ -42,35 +55,68 @@ type PrinterTemplate struct {
 	Name string `json:"name"`
 }
 
+// ── Order ─────────────────────────────────────────────────────────────────────
+
 type OrderWrapper struct {
 	FkPrinter  int   `json:"fk_printer"`
 	PrintCount int   `json:"print_count"`
 	OnlyOrder  int   `json:"only_order"`
+	OnlyVoid   int   `json:"only_void"`
 	Order      Order `json:"order"`
 }
 
 type Order struct {
-	ID              int        `json:"id"`
-	FkTableCod      *int       `json:"fk_table_cod"`
-	Name            string     `json:"name"`
-	CreatedAt       string     `json:"created_at"`
-	DeliveryMethod  int        `json:"delivery_method"`
-	PaymentMethod   string     `json:"payment_method"`
-	OrderPrice      float64    `json:"order_price"`
-	DeliveryPrice   float64    `json:"delivery_price"`
-	TotalRefundPrice float64   `json:"total_refund_price"`
-	OrderPriceCancel float64   `json:"order_price_cancel"`
-	SurchargeValue  float64    `json:"surcharge_value"`
-	DiscountValue   float64    `json:"discount_value"`
-	Surcharge       float64    `json:"surcharge"`
-	Vatvalue        float64    `json:"vatvalue"`
-	Discount        float64    `json:"discount"`
-	Restorant       Restaurant `json:"restorant"`
-	Table           *TableInfo `json:"table"`
-	TableCod        *TableCod  `json:"table_cod"`
-	Items           []Item     `json:"items"`
-	ItemsCod        []Item     `json:"items_cod"`
+	ID               int        `json:"id"`
+	Ref              string     `json:"ref"`
+	FkTableCod       *int       `json:"fk_table_cod"`
+	Name             string     `json:"name"`
+	CreatedAt        string     `json:"created_at"`
+	DeliveryMethod   int        `json:"delivery_method"`
+	PaymentMethod    string     `json:"payment_method"`
+	OrderPrice       float64    `json:"order_price"`
+	DeliveryPrice    float64    `json:"delivery_price"`
+	TotalRefundPrice float64    `json:"total_refund_price"`
+	OrderPriceCancel float64    `json:"order_price_cancel"`
+	SurchargeValue   float64    `json:"surcharge_value"`
+	DiscountValue    float64    `json:"discount_value"`
+	Surcharge        float64    `json:"surcharge"`
+	Vatvalue         float64    `json:"vatvalue"`
+	Discount         float64    `json:"discount"`
+	Restorant        Restaurant `json:"restorant"`
+	Table            *TableInfo `json:"table"`
+	TableCod         *TableCod  `json:"table_cod"`
+	Items            []Item     `json:"items"`
+	ItemsCod         []Item     `json:"items_cod"`
+
+	// Disisipkan oleh Laravel setelah wkhtmltoimage sukses
+	ImageBase64 string `json:"image_base64"`
 }
+
+// ── Note ──────────────────────────────────────────────────────────────────────
+
+type NoteItem struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	FkPrinter    int    `json:"fk_printer"`
+	PrintAttempt int    `json:"print_attempt"`
+	PrintCount   int    `json:"print_count"`
+	ImageBase64  string `json:"image_base64"`
+	ImgPrint     string `json:"img_print"`
+}
+
+// ── Report ────────────────────────────────────────────────────────────────────
+
+type ReportItem struct {
+	ID           int    `json:"id"`
+	Type         string `json:"type"`
+	FkCompany    int    `json:"fk_company"`
+	PrintAttempt int    `json:"print_attempt"`
+	PrintCount   int    `json:"print_count"`
+	ImageBase64  string `json:"image_base64"`
+	ImgPrint     string `json:"img_print"`
+}
+
+// ── Supporting types ──────────────────────────────────────────────────────────
 
 type Restaurant struct {
 	Name         string  `json:"name"`
@@ -95,10 +141,10 @@ type TableCod struct {
 }
 
 type Item struct {
-	Name         string      `json:"name"`
-	Price        float64     `json:"price"`
-	Pivot        ItemPivot   `json:"pivot"`
-	Options      []ItemOption `json:"options"`
+	Name         string            `json:"name"`
+	Price        float64           `json:"price"`
+	Pivot        ItemPivot         `json:"pivot"`
+	Options      []ItemOption      `json:"options"`
 	PrinterGroup *ItemPrinterGroup `json:"printer_group"`
 }
 
@@ -121,79 +167,4 @@ type ItemPrinterGroup struct {
 
 type DataPrinterGroup struct {
 	ID int `json:"id"`
-}
-
-// ── API call ─────────────────────────────────────────────────────────────────
-
-var httpClient = &http.Client{
-	Timeout: 15 * time.Second,
-}
-
-func fetchKypesen(serverURL string) (*KypesenResponse, error) {
-	resp, err := httpClient.Get(serverURL)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	var result KypesenResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parsing JSON: %w", err)
-	}
-
-	return &result, nil
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func (o Order) GetReceiptNumber() string {
-	if o.FkTableCod != nil {
-		return fmt.Sprintf("%d", *o.FkTableCod)
-	}
-	return fmt.Sprintf("%d", o.ID)
-}
-
-func (o Order) GetCustomer() string {
-	if o.Name == "" {
-		return "Guest"
-	}
-	return o.Name
-}
-
-func (o Order) GetTableArea() string {
-	if o.Table != nil && o.Table.Restoarea != nil {
-		return o.Table.Restoarea.Name
-	}
-	return "N/A"
-}
-
-func (o Order) GetTableName() string {
-	if o.Table != nil {
-		return o.Table.Name
-	}
-	return "N/A"
-}
-
-func (o Order) GetOrderType() string {
-	switch o.DeliveryMethod {
-	case 3:
-		return "Dine-In"
-	case 2:
-		return "Pickup"
-	default:
-		return "Delivery"
-	}
-}
-
-func (o Order) GetTotal() float64 {
-	return o.DeliveryPrice + o.OrderPrice - o.TotalRefundPrice - o.OrderPriceCancel + o.SurchargeValue - o.DiscountValue
-}
-
-func (o Order) GetSubtotal() float64 {
-	return o.OrderPrice - o.Vatvalue - o.TotalRefundPrice
 }

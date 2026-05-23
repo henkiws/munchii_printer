@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/getlantern/systray v1.2.2
+	github.com/gorilla/websocket v1.5.1
 	golang.org/x/sys v0.15.0
 )
 

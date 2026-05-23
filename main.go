@@ -9,50 +9,52 @@ import (
 )
 
 func main() {
-	// CLI mode: called from PowerShell UI for add/edit/delete/get/testprint
+	// CLI mode: dipanggil dari PowerShell UI
 	if len(os.Args) > 1 && handleCLI(os.Args) {
 		return
 	}
 
-	// Normal mode: run as tray app (no console window when built with -H windowsgui)
+	// Normal mode: tray app
 	systray.Run(onReady, onExit)
 }
 
 func onReady() {
 	systray.SetIcon(getIconBytes())
-	systray.SetTitle("Munchii Printer")
-	systray.SetTooltip("Munchii Printer — starting...")
+	systray.SetTitle("Kypesen Printer")
+	systray.SetTooltip("Kypesen Printer — starting...")
 
 	// ── Menu ──────────────────────────────────────────────────────────────────
-	mStatus := systray.AddMenuItem("● Starting...", "Polling status")
+	mStatus := systray.AddMenuItem("● Starting...", "Status koneksi")
 	mStatus.Disable()
 
 	systray.AddSeparator()
 
-	mManage  := systray.AddMenuItem("⚙   Manage Printers", "Add, edit or remove printers")
-	mViewLog := systray.AddMenuItem("📋  View Log", "View recent activity")
+	mManage  := systray.AddMenuItem("⚙   Manage Printers", "Tambah, edit, atau hapus printer")
+	mViewLog := systray.AddMenuItem("📋  View Log", "Lihat aktivitas terakhir")
 
 	systray.AddSeparator()
 
 	mAutoStart := systray.AddMenuItemCheckbox(
-		"🔄  Auto-start with Windows",
-		"Launch automatically on Windows login",
+		"🔄  Auto-start dengan Windows",
+		"Jalankan otomatis saat login Windows",
 		isAutoStartEnabled(),
 	)
 
 	systray.AddSeparator()
-	mExit := systray.AddMenuItem("✖   Exit", "Stop polling and quit")
+	mExit := systray.AddMenuItem("✖   Exit", "Hentikan dan keluar")
 
-	// ── Boot ──────────────────────────────────────────────────────────────────
+	// ── Startup ───────────────────────────────────────────────────────────────
+	StartLogCleanup() // auto-cleanup log > 1 bulan
+
 	printers, err := loadPrinters()
 	if err != nil {
-		logStatus("Error loading printers: " + err.Error())
+		logStatus("ERROR Gagal load printers: " + err.Error())
 	} else if len(printers) == 0 {
-		logStatus("No printers configured. Use Manage Printers to add one.")
-		systray.SetTooltip("Munchii Printer — no printers configured")
+		logStatus("WARN Belum ada printer dikonfigurasi. Gunakan Manage Printers.")
+		systray.SetTooltip("Kypesen Printer — belum ada printer")
 	}
 
-	manager.StartAll()
+	wsManager.StartAll()
 	updateStatus(mStatus)
 
 	// ── Event loop ────────────────────────────────────────────────────────────
@@ -62,7 +64,7 @@ func onReady() {
 			case <-mManage.ClickedCh:
 				openManageWindow()
 				go func() {
-					manager.Restart()
+					wsManager.Restart()
 					updateStatus(mStatus)
 				}()
 
@@ -73,15 +75,15 @@ func onReady() {
 				if mAutoStart.Checked() {
 					mAutoStart.Uncheck()
 					unregisterAutoStart()
-					logStatus("Auto-start disabled")
+					logStatus("INFO Auto-start dinonaktifkan")
 				} else {
 					mAutoStart.Check()
 					registerAutoStart()
-					logStatus("Auto-start enabled")
+					logStatus("INFO Auto-start diaktifkan")
 				}
 
 			case <-mExit.ClickedCh:
-				manager.StopAll()
+				wsManager.StopAll()
 				systray.Quit()
 				return
 			}
@@ -90,27 +92,29 @@ func onReady() {
 }
 
 func onExit() {
-	logStatus("Munchii Printer exiting")
+	logStatus("INFO Kypesen Printer keluar")
 }
 
 func updateStatus(mStatus *systray.MenuItem) {
 	printers, err := loadPrinters()
 	if err != nil || len(printers) == 0 {
-		mStatus.SetTitle("● No printers configured")
-		systray.SetTooltip("Munchii Printer — no printers")
+		mStatus.SetTitle("● Belum ada printer")
+		systray.SetTooltip("Kypesen Printer — belum ada printer")
 		return
 	}
 
-	statuses := manager.GetStatuses()
+	statuses := wsManager.GetStatuses()
 	lines := []string{}
 	allOK := true
 
 	for _, p := range printers {
 		st := statuses[p.ID]
 		icon := "✅"
-		if strings.Contains(st, "error") {
+		if strings.Contains(st, "error") || strings.Contains(st, "disconnected") {
 			icon = "❌"
 			allOK = false
+		} else if strings.Contains(st, "connecting") {
+			icon = "🔄"
 		}
 		lines = append(lines, fmt.Sprintf("%s %s", icon, p.PrinterName))
 	}
@@ -118,61 +122,78 @@ func updateStatus(mStatus *systray.MenuItem) {
 	title := "● " + strings.Join(lines, "  |  ")
 	if len(title) > 64 {
 		if allOK {
-			title = fmt.Sprintf("● %d printer(s) running", len(printers))
+			title = fmt.Sprintf("● %d printer(s) connected", len(printers))
 		} else {
-			title = fmt.Sprintf("● %d printer(s) — check errors", len(printers))
+			title = fmt.Sprintf("● %d printer(s) — cek koneksi", len(printers))
 		}
 	}
 	mStatus.SetTitle(title)
 
 	if allOK {
-		systray.SetTooltip(fmt.Sprintf("Munchii Printer — %d printer(s) OK", len(printers)))
+		systray.SetTooltip(fmt.Sprintf("Kypesen Printer — %d printer(s) OK", len(printers)))
 	} else {
-		systray.SetTooltip("Munchii Printer — errors detected!")
+		systray.SetTooltip("Kypesen Printer — ada printer terputus!")
 	}
 }
 
 func openLogWindow() {
-	logs := getRecentLogs(60)
+	logs := getRecentLogs(100)
 	content := strings.Join(logs, "\\n")
 	if content == "" {
-		content = "(No logs yet)"
+		content = "(Belum ada log)"
 	}
 
+	// Color-code log levels untuk tampilan
+	// OK → hijau, ERROR → merah, WARN → kuning, INFO → abu
 	ps := fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Munchii Printer - Activity Log"
-$form.Size = New-Object System.Drawing.Size(760, 540)
+$form.Text = "Kypesen Printer - Activity Log"
+$form.Size = New-Object System.Drawing.Size(900, 600)
 $form.StartPosition = "CenterScreen"
-$form.BackColor = [System.Drawing.Color]::FromArgb(240, 242, 245)
+$form.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
 
 $pnlTitle = New-Object System.Windows.Forms.Panel
 $pnlTitle.Dock = "Top"
 $pnlTitle.Height = 48
-$pnlTitle.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
+$pnlTitle.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 35)
 $lbl = New-Object System.Windows.Forms.Label
-$lbl.Text = "  Activity Log"
-$lbl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 13)
-$lbl.ForeColor = [System.Drawing.Color]::White
-$lbl.Location = New-Object System.Drawing.Point(10, 10)
-$lbl.Size = New-Object System.Drawing.Size(400, 30)
+$lbl.Text = "  Activity Log  (100 baris terakhir — log disimpan 1 bulan)"
+$lbl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+$lbl.ForeColor = [System.Drawing.Color]::FromArgb(255, 180, 0)
+$lbl.Location = New-Object System.Drawing.Point(10, 12)
+$lbl.Size = New-Object System.Drawing.Size(860, 26)
 $pnlTitle.Controls.Add($lbl)
 $form.Controls.Add($pnlTitle)
 
-$txt = New-Object System.Windows.Forms.TextBox
-$txt.Multiline = $true
-$txt.ScrollBars = "Vertical"
-$txt.ReadOnly = $true
-$txt.Location = New-Object System.Drawing.Point(10, 58)
-$txt.Size = New-Object System.Drawing.Size(724, 430)
-$txt.Font = New-Object System.Drawing.Font("Consolas", 9)
-$txt.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
-$txt.ForeColor = [System.Drawing.Color]::FromArgb(180, 255, 180)
-$txt.BorderStyle = "None"
-$txt.Text = "%s"
-$form.Controls.Add($txt)
+$rtb = New-Object System.Windows.Forms.RichTextBox
+$rtb.Multiline = $true
+$rtb.ScrollBars = "Vertical"
+$rtb.ReadOnly = $true
+$rtb.Location = New-Object System.Drawing.Point(10, 58)
+$rtb.Size = New-Object System.Drawing.Size(864, 490)
+$rtb.Font = New-Object System.Drawing.Font("Consolas", 9)
+$rtb.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 28)
+$rtb.BorderStyle = "None"
+$form.Controls.Add($rtb)
+
+$lines = "%s" -split "\\n"
+foreach ($line in $lines) {
+    if ($line -match "^\[.*?\] OK") {
+        $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(80, 220, 120)
+    } elseif ($line -match "^\[.*?\] ERROR") {
+        $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(255, 90, 80)
+    } elseif ($line -match "^\[.*?\] WARN") {
+        $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(255, 200, 60)
+    } elseif ($line -match "^\[.*?\] INFO") {
+        $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(140, 180, 255)
+    } else {
+        $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(180, 180, 200)
+    }
+    $rtb.AppendText($line + [char]10)
+}
+$rtb.ScrollToCaret()
 $form.ShowDialog() | Out-Null
 `, content)
 
