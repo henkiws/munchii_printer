@@ -21,19 +21,39 @@ func openManageWindow() {
 
 	hubCfg := loadHubConfig()
 
-	// Build ListView rows
-	// Tidak pakai fmt.Sprintf di sini agar tidak ada % yang konflik
-	// dengan outer fmt.Sprintf template
+	// Build ListView rows — ambil status dari wsManager
+	statuses := wsManager.GetStatuses()
 	listItems := ""
 	for _, p := range printers {
 		safeName := strings.ReplaceAll(p.PrinterName, "'", "''")
 		safeConn := strings.ReplaceAll(p.ConnSummary(), "'", "''")
 		safeUUID := strings.ReplaceAll(p.PrinterUUID, "'", "''")
 		idStr := strconv.Itoa(p.ID)
+
+		// Tentukan label status
+		st := statuses[p.ID]
+		statusLabel := "Menghubungkan..."
+		statusColor := "Orange"
+		if strings.Contains(st, "connected") && !strings.Contains(st, "dis") {
+			statusLabel = "● Connected"
+			statusColor = "Green"
+		} else if strings.Contains(st, "disconnected") || strings.Contains(st, "error") {
+			statusLabel = "✗ Disconnected"
+			statusColor = "Red"
+		} else if strings.Contains(st, "connecting") {
+			statusLabel = "⟳ Connecting..."
+			statusColor = "Orange"
+		} else if p.PrinterUUID == "" {
+			statusLabel = "! UUID belum diisi"
+			statusColor = "Red"
+		}
+
 		listItems += "$row = New-Object System.Windows.Forms.ListViewItem('" + idStr + "')\n"
 		listItems += "$row.SubItems.Add('" + safeName + "') | Out-Null\n"
 		listItems += "$row.SubItems.Add('" + safeConn + "') | Out-Null\n"
 		listItems += "$row.SubItems.Add('" + safeUUID + "') | Out-Null\n"
+		listItems += "$row.SubItems.Add('" + statusLabel + "') | Out-Null\n"
+		listItems += "$row.SubItems[4].ForeColor = [System.Drawing.Color]::" + statusColor + "\n"
 		listItems += "$row.Tag = " + idStr + "\n"
 		listItems += "$lvPrinters.Items.Add($row) | Out-Null\n"
 	}
@@ -50,8 +70,8 @@ Add-Type -AssemblyName System.Drawing
 # ═══════════════════════════════════════════════════
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Munchii Printer Manager"
-$form.Size = New-Object System.Drawing.Size(980, 800)
-$form.MinimumSize = New-Object System.Drawing.Size(920, 720)
+$form.Size = New-Object System.Drawing.Size(1000, 860)
+$form.MinimumSize = New-Object System.Drawing.Size(940, 780)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(245, 246, 250)
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
@@ -79,10 +99,9 @@ $lblSub.Location = New-Object System.Drawing.Point(16, 36)
 $lblSub.Size = New-Object System.Drawing.Size(300, 20)
 $pnlTitle.Controls.Add($lblSub)
 
-# Hub Settings button di title bar (kanan)
 $btnHubSettings = New-Object System.Windows.Forms.Button
-$btnHubSettings.Text = "⚙  Hub Settings"
-$btnHubSettings.Location = New-Object System.Drawing.Point(820, 16)
+$btnHubSettings.Text = "  Hub Settings"
+$btnHubSettings.Location = New-Object System.Drawing.Point(830, 16)
 $btnHubSettings.Size = New-Object System.Drawing.Size(130, 32)
 $btnHubSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnHubSettings.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(255, 180, 0)
@@ -96,25 +115,26 @@ $pnlTitle.Controls.Add($btnHubSettings)
 # ── Hub status strip ──────────────────────────────────
 $pnlHubStrip = New-Object System.Windows.Forms.Panel
 $pnlHubStrip.Location = New-Object System.Drawing.Point(0, 64)
-$pnlHubStrip.Size = New-Object System.Drawing.Size(980, 30)
+$pnlHubStrip.Size = New-Object System.Drawing.Size(1000, 30)
 $pnlHubStrip.BackColor = [System.Drawing.Color]::FromArgb(25, 25, 45)
 $form.Controls.Add($pnlHubStrip)
 
+$Script:hubURLVal = '%s'
+$hubDisplay = if ($Script:hubURLVal -ne '') { $Script:hubURLVal } else { '(belum dikonfigurasi — klik Hub Settings)' }
+$hubColor = if ($Script:hubURLVal -ne '') { [System.Drawing.Color]::FromArgb(80, 220, 120) } else { [System.Drawing.Color]::FromArgb(255, 150, 50) }
 $lblHubStatus = New-Object System.Windows.Forms.Label
-$hubDisplay = if ('%s' -ne '') { '%s' } else { '(belum dikonfigurasi — klik Hub Settings)' }
-$hubColor = if ('%s' -ne '') { [System.Drawing.Color]::FromArgb(80, 220, 120) } else { [System.Drawing.Color]::FromArgb(255, 150, 50) }
 $lblHubStatus.Text = "  Hub WS: " + $hubDisplay
 $lblHubStatus.ForeColor = $hubColor
 $lblHubStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblHubStatus.Location = New-Object System.Drawing.Point(0, 0)
-$lblHubStatus.Size = New-Object System.Drawing.Size(900, 30)
+$lblHubStatus.Size = New-Object System.Drawing.Size(960, 30)
 $lblHubStatus.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $pnlHubStrip.Controls.Add($lblHubStatus)
 
 # ── Section strip ──────────────────────────────────────
 $pnlSec = New-Object System.Windows.Forms.Panel
 $pnlSec.Location = New-Object System.Drawing.Point(0, 94)
-$pnlSec.Size = New-Object System.Drawing.Size(980, 34)
+$pnlSec.Size = New-Object System.Drawing.Size(1000, 34)
 $pnlSec.BackColor = [System.Drawing.Color]::FromArgb(232, 234, 242)
 $form.Controls.Add($pnlSec)
 
@@ -130,7 +150,7 @@ $pnlSec.Controls.Add($lblHdr)
 # ── ListView ───────────────────────────────────────────
 $lvPrinters = New-Object System.Windows.Forms.ListView
 $lvPrinters.Location = New-Object System.Drawing.Point(14, 136)
-$lvPrinters.Size = New-Object System.Drawing.Size(940, 160)
+$lvPrinters.Size = New-Object System.Drawing.Size(960, 160)
 $lvPrinters.View = [System.Windows.Forms.View]::Details
 $lvPrinters.FullRowSelect = $true
 $lvPrinters.GridLines = $true
@@ -140,12 +160,13 @@ $lvPrinters.BackColor = [System.Drawing.Color]::White
 $lvPrinters.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lvPrinters.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
 $lvPrinters.Columns.Add("ID",         40)  | Out-Null
-$lvPrinters.Columns.Add("Name",      180)  | Out-Null
-$lvPrinters.Columns.Add("Connection",180)  | Out-Null
-$lvPrinters.Columns.Add("UUID",      510)  | Out-Null
+$lvPrinters.Columns.Add("Name",      160)  | Out-Null
+$lvPrinters.Columns.Add("Connection",150)  | Out-Null
+$lvPrinters.Columns.Add("UUID",      450)  | Out-Null
+$lvPrinters.Columns.Add("Status",    140)  | Out-Null
 $form.Controls.Add($lvPrinters)
 
-# Populate
+# Populate rows
 %s
 
 # ── Colors ─────────────────────────────────────────────
@@ -157,8 +178,9 @@ $cWhite  = [System.Drawing.Color]::White
 
 function MakeBtn($text, $x, $y, $w, $h, $bg, $fg) {
     $b = New-Object System.Windows.Forms.Button
-    $b.Text = $text; $b.Location = New-Object System.Drawing.Point($x,$y)
-    $b.Size = New-Object System.Drawing.Size($w,$h)
+    $b.Text = $text
+    $b.Location = New-Object System.Drawing.Point($x, $y)
+    $b.Size = New-Object System.Drawing.Size($w, $h)
     $b.BackColor = $bg; $b.ForeColor = $fg
     $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $b.FlatAppearance.BorderSize = 0
@@ -167,76 +189,79 @@ function MakeBtn($text, $x, $y, $w, $h, $bg, $fg) {
     return $b
 }
 
-$btnTest   = MakeBtn "  Test Print"  14  304  148 34 $cBlue   $cWhite
-$btnEdit   = MakeBtn "  Edit"       170  304  110 34 $cOrange $cWhite
-$btnDelete = MakeBtn "  Delete"     288  304  110 34 $cRed    $cWhite
+$btnTest      = MakeBtn "  Test Print"   14  308  148 34 $cBlue   $cWhite
+$btnEdit      = MakeBtn "  Edit"        170  308  110 34 $cOrange $cWhite
+$btnDelete    = MakeBtn "  Delete"      288  308  110 34 $cRed    $cWhite
+$btnRefreshSt = MakeBtn "  Refresh Status" 420 308 140 34 ([System.Drawing.Color]::FromArgb(60,60,90)) $cWhite
 $form.Controls.Add($btnTest)
 $form.Controls.Add($btnEdit)
 $form.Controls.Add($btnDelete)
+$form.Controls.Add($btnRefreshSt)
 
 # ── Status label ───────────────────────────────────────
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Location = New-Object System.Drawing.Point(14, 344)
-$lblStatus.Size = New-Object System.Drawing.Size(940, 24)
+$lblStatus.Location = New-Object System.Drawing.Point(14, 350)
+$lblStatus.Size = New-Object System.Drawing.Size(960, 22)
 $lblStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblStatus.ForeColor = $cGreen
 $form.Controls.Add($lblStatus)
 
-$sep = New-Object System.Windows.Forms.Label
-$sep.BorderStyle = "Fixed3D"
-$sep.Location = New-Object System.Drawing.Point(14, 372)
-$sep.Size = New-Object System.Drawing.Size(940, 2)
-$form.Controls.Add($sep)
+$sepLine = New-Object System.Windows.Forms.Label
+$sepLine.BorderStyle = "Fixed3D"
+$sepLine.Location = New-Object System.Drawing.Point(14, 378)
+$sepLine.Size = New-Object System.Drawing.Size(960, 2)
+$form.Controls.Add($sepLine)
 
 # ═══════════════════════════════════════════════════
 # ADD/EDIT PANEL
 # ═══════════════════════════════════════════════════
 $grp = New-Object System.Windows.Forms.GroupBox
 $grp.Text = "  Add New Printer"
-$grp.Location = New-Object System.Drawing.Point(14, 380)
-$grp.Size = New-Object System.Drawing.Size(940, 380)
+$grp.Location = New-Object System.Drawing.Point(14, 386)
+$grp.Size = New-Object System.Drawing.Size(960, 410)
 $grp.BackColor = [System.Drawing.Color]::White
 $grp.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
 $form.Controls.Add($grp)
 
 $Script:editID = -1
 
-function MkLbl($t,$x,$y) {
+function MkLbl($t, $x, $y) {
     $l = New-Object System.Windows.Forms.Label
-    $l.Text=$t; $l.Location=New-Object System.Drawing.Point($x,$y)
-    $l.Size=New-Object System.Drawing.Size(148,26)
-    $l.Font=New-Object System.Drawing.Font("Segoe UI",9)
-    $l.ForeColor=[System.Drawing.Color]::FromArgb(70,70,90)
-    $l.TextAlign=[System.Drawing.ContentAlignment]::MiddleRight
+    $l.Text = $t
+    $l.Location = New-Object System.Drawing.Point($x, $y)
+    $l.Size = New-Object System.Drawing.Size(148, 26)
+    $l.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $l.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 90)
+    $l.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
     return $l
 }
-function MkTxt($x,$y,$w) {
+function MkTxt($x, $y, $w) {
     $t = New-Object System.Windows.Forms.TextBox
-    $t.Location=New-Object System.Drawing.Point($x,$y)
-    $t.Size=New-Object System.Drawing.Size($w,26)
-    $t.Font=New-Object System.Drawing.Font("Segoe UI",9)
-    $t.BorderStyle="FixedSingle"
-    $t.BackColor=[System.Drawing.Color]::FromArgb(250,250,252)
+    $t.Location = New-Object System.Drawing.Point($x, $y)
+    $t.Size = New-Object System.Drawing.Size($w, 26)
+    $t.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $t.BorderStyle = "FixedSingle"
+    $t.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 252)
     return $t
 }
-function MkCombo($x,$y,$w) {
+function MkCombo($x, $y, $w) {
     $c = New-Object System.Windows.Forms.ComboBox
-    $c.Location=New-Object System.Drawing.Point($x,$y)
-    $c.Size=New-Object System.Drawing.Size($w,26)
-    $c.Font=New-Object System.Drawing.Font("Segoe UI",9)
-    $c.DropDownStyle=[System.Windows.Forms.ComboBoxStyle]::DropDownList
-    $c.FlatStyle=[System.Windows.Forms.FlatStyle]::Flat
+    $c.Location = New-Object System.Drawing.Point($x, $y)
+    $c.Size = New-Object System.Drawing.Size($w, 26)
+    $c.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $c.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $c.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     return $c
 }
 
 $lx = 14; $tx = 170
 
-# Row 1: Printer Name
+# Row 1 — Printer Name
 $grp.Controls.Add((MkLbl "Printer Name :" $lx 32))
-$txtName = MkTxt $tx 32 740
+$txtName = MkTxt $tx 32 760
 $grp.Controls.Add($txtName)
 
-# Row 2: Connection Type
+# Row 2 — Connection Type
 $grp.Controls.Add((MkLbl "Connection Type :" $lx 68))
 $cboType = MkCombo $tx 68 200
 $cboType.Items.Add("network")   | Out-Null
@@ -245,7 +270,6 @@ $cboType.Items.Add("usb")       | Out-Null
 $cboType.SelectedIndex = 0
 $grp.Controls.Add($cboType)
 
-# Help button for connection type
 $btnHelp = New-Object System.Windows.Forms.Button
 $btnHelp.Text = " ? "
 $btnHelp.Location = New-Object System.Drawing.Point(($tx + 208), 68)
@@ -259,14 +283,13 @@ $btnHelp.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
 $btnHelp.Cursor = [System.Windows.Forms.Cursors]::Hand
 $grp.Controls.Add($btnHelp)
 
+# ── Connection type help dialog ────────────────────────
 $btnHelp.Add_Click({
     $t = $cboType.SelectedItem
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
 
     $hw = New-Object System.Windows.Forms.Form
     $hw.Text = "Panduan Koneksi Printer"
-    $hw.Size = New-Object System.Drawing.Size(560, 520)
+    $hw.Size = New-Object System.Drawing.Size(580, 560)
     $hw.StartPosition = "CenterParent"
     $hw.FormBorderStyle = "FixedDialog"
     $hw.MaximizeBox = $false
@@ -282,17 +305,17 @@ $btnHelp.Add_Click({
     $hl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 12)
     $hl.ForeColor = [System.Drawing.Color]::FromArgb(255, 180, 0)
     $hl.Location = New-Object System.Drawing.Point(8, 12)
-    $hl.Size = New-Object System.Drawing.Size(500, 28)
+    $hl.Size = New-Object System.Drawing.Size(540, 28)
     $ht.Controls.Add($hl)
     $hw.Controls.Add($ht)
 
     $tabs = New-Object System.Windows.Forms.TabControl
     $tabs.Location = New-Object System.Drawing.Point(10, 62)
-    $tabs.Size = New-Object System.Drawing.Size(524, 390)
+    $tabs.Size = New-Object System.Drawing.Size(546, 430)
     $tabs.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $hw.Controls.Add($tabs)
 
-    function MakeTab($title, $lines) {
+    function MakeHelpTab($title, $lines) {
         $tab = New-Object System.Windows.Forms.TabPage
         $tab.Text = $title
         $tab.BackColor = [System.Drawing.Color]::White
@@ -398,19 +421,21 @@ $btnHelp.Add_Click({
         "! website produsen printer."
     )
 
-    $tabs.TabPages.Add((MakeTab "  Network/IP  " $netLines))
-    $tabs.TabPages.Add((MakeTab "  Bluetooth  " $btLines))
-    $tabs.TabPages.Add((MakeTab "  USB  " $usbLines))
+    $tabs.TabPages.Add((MakeHelpTab "  Network/IP  " $netLines))
+    $tabs.TabPages.Add((MakeHelpTab "  Bluetooth  " $btLines))
+    $tabs.TabPages.Add((MakeHelpTab "  USB  " $usbLines))
 
     if ($t -eq "bluetooth") { $tabs.SelectedIndex = 1 }
     elseif ($t -eq "usb")   { $tabs.SelectedIndex = 2 }
     else                     { $tabs.SelectedIndex = 0 }
 
+    # Tutup button — posisi aman di dalam form
     $hClose = New-Object System.Windows.Forms.Button
     $hClose.Text = "Tutup"
-    $hClose.Location = New-Object System.Drawing.Point(430, 460)
-    $hClose.Size = New-Object System.Drawing.Size(90, 32)
+    $hClose.Location = New-Object System.Drawing.Point(446, 502)
+    $hClose.Size = New-Object System.Drawing.Size(100, 34)
     $hClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $hClose.FlatAppearance.BorderSize = 0
     $hClose.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 35)
     $hClose.ForeColor = [System.Drawing.Color]::White
     $hClose.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
@@ -422,7 +447,7 @@ $btnHelp.Add_Click({
 # ── Network fields ─────────────────────────────────────
 $pnlNet = New-Object System.Windows.Forms.Panel
 $pnlNet.Location = New-Object System.Drawing.Point(0, 104)
-$pnlNet.Size = New-Object System.Drawing.Size(920, 70)
+$pnlNet.Size = New-Object System.Drawing.Size(940, 70)
 $pnlNet.BackColor = [System.Drawing.Color]::White
 $grp.Controls.Add($pnlNet)
 
@@ -444,10 +469,10 @@ $lblPortNote.Font = New-Object System.Drawing.Font("Segoe UI", 8)
 $lblPortNote.ForeColor = [System.Drawing.Color]::Gray
 $pnlNet.Controls.Add($lblPortNote)
 
-# ── COM port fields (Bluetooth / USB-Serial) ───────────
+# ── COM port fields ────────────────────────────────────
 $pnlCOM = New-Object System.Windows.Forms.Panel
 $pnlCOM.Location = New-Object System.Drawing.Point(0, 104)
-$pnlCOM.Size = New-Object System.Drawing.Size(920, 70)
+$pnlCOM.Size = New-Object System.Drawing.Size(940, 70)
 $pnlCOM.BackColor = [System.Drawing.Color]::White
 $pnlCOM.Visible = $false
 $grp.Controls.Add($pnlCOM)
@@ -473,7 +498,7 @@ $pnlCOM.Controls.Add($cboBaud)
 # ── USB Windows Printer fields ─────────────────────────
 $pnlUSBWin = New-Object System.Windows.Forms.Panel
 $pnlUSBWin.Location = New-Object System.Drawing.Point(0, 178)
-$pnlUSBWin.Size = New-Object System.Drawing.Size(920, 36)
+$pnlUSBWin.Size = New-Object System.Drawing.Size(940, 36)
 $pnlUSBWin.BackColor = [System.Drawing.Color]::White
 $pnlUSBWin.Visible = $false
 $grp.Controls.Add($pnlUSBWin)
@@ -498,17 +523,15 @@ $lblOrCOM.Font = New-Object System.Drawing.Font("Segoe UI", 8)
 $lblOrCOM.ForeColor = [System.Drawing.Color]::Gray
 $pnlUSBWin.Controls.Add($lblOrCOM)
 
-# ── UUID field ────────────────────────────────────────
+# ── UUID field ─────────────────────────────────────────
 $grp.Controls.Add((MkLbl "Printer UUID :" $lx 226))
-$txtUUID = MkTxt $tx 226 560
-$txtUUID.Text = ""
+$txtUUID = MkTxt $tx 226 580
 $txtUUID.Font = New-Object System.Drawing.Font("Consolas", 9)
 $grp.Controls.Add($txtUUID)
 
-# UUID help button
 $btnUUIDHelp = New-Object System.Windows.Forms.Button
 $btnUUIDHelp.Text = " ? "
-$btnUUIDHelp.Location = New-Object System.Drawing.Point(($tx + 568), 226)
+$btnUUIDHelp.Location = New-Object System.Drawing.Point(($tx + 588), 226)
 $btnUUIDHelp.Size = New-Object System.Drawing.Size(32, 26)
 $btnUUIDHelp.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnUUIDHelp.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(0, 120, 212)
@@ -520,11 +543,9 @@ $btnUUIDHelp.Cursor = [System.Windows.Forms.Cursors]::Hand
 $grp.Controls.Add($btnUUIDHelp)
 
 $btnUUIDHelp.Add_Click({
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
     $hw = New-Object System.Windows.Forms.Form
     $hw.Text = "Apa itu Printer UUID?"
-    $hw.Size = New-Object System.Drawing.Size(520, 380)
+    $hw.Size = New-Object System.Drawing.Size(520, 440)
     $hw.StartPosition = "CenterParent"
     $hw.FormBorderStyle = "FixedDialog"
     $hw.MaximizeBox = $false
@@ -545,14 +566,14 @@ $btnUUIDHelp.Add_Click({
 
     $rtb = New-Object System.Windows.Forms.RichTextBox
     $rtb.Location = New-Object System.Drawing.Point(14, 66)
-    $rtb.Size = New-Object System.Drawing.Size(476, 260)
+    $rtb.Size = New-Object System.Drawing.Size(476, 316)
     $rtb.ReadOnly = $true
     $rtb.BorderStyle = "None"
     $rtb.BackColor = [System.Drawing.Color]::FromArgb(245, 246, 250)
     $rtb.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $rtb.ScrollBars = "Vertical"
 
-    $lines = @(
+    $uLines = @(
         "## Apa itu UUID Printer?"
         "UUID adalah identitas unik untuk setiap printer fisik"
         "di sistem Munchii. Setiap printer punya UUID berbeda."
@@ -574,7 +595,7 @@ $btnUUIDHelp.Add_Click({
         "! Pastikan UUID benar agar printer menerima"
         "! job cetak yang ditujukan untuknya."
     )
-    foreach ($line in $lines) {
+    foreach ($line in $uLines) {
         if ($line.StartsWith("##")) {
             $rtb.SelectionFont = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
             $rtb.SelectionColor = [System.Drawing.Color]::FromArgb(0, 90, 180)
@@ -599,9 +620,10 @@ $btnUUIDHelp.Add_Click({
 
     $hClose = New-Object System.Windows.Forms.Button
     $hClose.Text = "Tutup"
-    $hClose.Location = New-Object System.Drawing.Point(390, 332)
-    $hClose.Size = New-Object System.Drawing.Size(90, 32)
+    $hClose.Location = New-Object System.Drawing.Point(396, 390)
+    $hClose.Size = New-Object System.Drawing.Size(100, 34)
     $hClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $hClose.FlatAppearance.BorderSize = 0
     $hClose.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 35)
     $hClose.ForeColor = [System.Drawing.Color]::White
     $hClose.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
@@ -610,17 +632,9 @@ $btnUUIDHelp.Add_Click({
     $hw.ShowDialog() | Out-Null
 })
 
-# ── WS URL preview (read-only) ────────────────────────
-$lblWSPreview = New-Object System.Windows.Forms.Label
-$lblWSPreview.Text = "WS URL Preview :"
-$lblWSPreview.Location = New-Object System.Drawing.Point($lx, 262)
-$lblWSPreview.Size = New-Object System.Drawing.Size(148, 26)
-$lblWSPreview.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$lblWSPreview.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 90)
-$lblWSPreview.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
-$grp.Controls.Add($lblWSPreview)
-
-$txtWSPreview = MkTxt $tx 262 740
+# ── WS URL preview ─────────────────────────────────────
+$grp.Controls.Add((MkLbl "WS URL Preview :" $lx 262))
+$txtWSPreview = MkTxt $tx 262 760
 $txtWSPreview.ReadOnly = $true
 $txtWSPreview.BackColor = [System.Drawing.Color]::FromArgb(235, 240, 248)
 $txtWSPreview.ForeColor = [System.Drawing.Color]::FromArgb(0, 90, 160)
@@ -628,7 +642,6 @@ $txtWSPreview.Font = New-Object System.Drawing.Font("Consolas", 8)
 $txtWSPreview.Text = "(isi Hub Settings dan UUID untuk melihat preview)"
 $grp.Controls.Add($txtWSPreview)
 
-# Update WS preview saat UUID berubah
 $Script:currentHubURL = '%s'
 $txtUUID.Add_TextChanged({
     $uuid = $txtUUID.Text.Trim()
@@ -638,7 +651,7 @@ $txtUUID.Add_TextChanged({
         $txtWSPreview.Text = $base + "?client_id=" + $uuid
         $txtWSPreview.ForeColor = [System.Drawing.Color]::FromArgb(0, 130, 0)
     } elseif ($hub -eq "") {
-        $txtWSPreview.Text = "(Hub Settings belum diisi — klik Hub Settings)"
+        $txtWSPreview.Text = "(Hub Settings belum diisi)"
         $txtWSPreview.ForeColor = [System.Drawing.Color]::FromArgb(200, 100, 0)
     } else {
         $txtWSPreview.Text = "(isi UUID printer)"
@@ -646,22 +659,22 @@ $txtUUID.Add_TextChanged({
     }
 })
 
-# ── Form status + buttons ──────────────────────────────
+# ── Form status + save/clear buttons ──────────────────
 $lblFrmStatus = New-Object System.Windows.Forms.Label
 $lblFrmStatus.Location = New-Object System.Drawing.Point($tx, 300)
-$lblFrmStatus.Size = New-Object System.Drawing.Size(740, 22)
+$lblFrmStatus.Size = New-Object System.Drawing.Size(760, 22)
 $lblFrmStatus.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $lblFrmStatus.ForeColor = $cGreen
 $grp.Controls.Add($lblFrmStatus)
 
-$btnSave  = MakeBtn "  Add Printer" $tx 326 160 36 $cGreen  $cWhite
+$btnSave = MakeBtn "  Add Printer" $tx 330 160 36 $cGreen $cWhite
 $btnClear = New-Object System.Windows.Forms.Button
 $btnClear.Text = "Clear"
-$btnClear.Location = New-Object System.Drawing.Point(($tx+168), 326)
+$btnClear.Location = New-Object System.Drawing.Point(($tx + 168), 330)
 $btnClear.Size = New-Object System.Drawing.Size(80, 36)
 $btnClear.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnClear.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$btnClear.ForeColor = [System.Drawing.Color]::FromArgb(60,60,60)
+$btnClear.ForeColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
 $grp.Controls.Add($btnSave)
 $grp.Controls.Add($btnClear)
 
@@ -669,12 +682,9 @@ $grp.Controls.Add($btnClear)
 # HUB SETTINGS POPUP
 # ═══════════════════════════════════════════════════
 $btnHubSettings.Add_Click({
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
     $hw = New-Object System.Windows.Forms.Form
     $hw.Text = "Hub Settings"
-    $hw.Size = New-Object System.Drawing.Size(600, 420)
+    $hw.Size = New-Object System.Drawing.Size(620, 460)
     $hw.StartPosition = "CenterParent"
     $hw.FormBorderStyle = "FixedDialog"
     $hw.MaximizeBox = $false
@@ -682,23 +692,21 @@ $btnHubSettings.Add_Click({
     $hw.BackColor = [System.Drawing.Color]::FromArgb(245, 246, 250)
     $hw.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
-    # Title
     $ht = New-Object System.Windows.Forms.Panel
     $ht.Dock = "Top"; $ht.Height = 56
     $ht.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 35)
     $hl = New-Object System.Windows.Forms.Label
-    $hl.Text = "  ⚙  Hub WebSocket Settings"
+    $hl.Text = "    Hub WebSocket Settings"
     $hl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 12)
     $hl.ForeColor = [System.Drawing.Color]::FromArgb(255, 180, 0)
     $hl.Location = New-Object System.Drawing.Point(8, 14)
-    $hl.Size = New-Object System.Drawing.Size(560, 28)
+    $hl.Size = New-Object System.Drawing.Size(580, 28)
     $ht.Controls.Add($hl)
     $hw.Controls.Add($ht)
 
-    # Info box
     $rtbInfo = New-Object System.Windows.Forms.RichTextBox
     $rtbInfo.Location = New-Object System.Drawing.Point(14, 70)
-    $rtbInfo.Size = New-Object System.Drawing.Size(558, 180)
+    $rtbInfo.Size = New-Object System.Drawing.Size(576, 200)
     $rtbInfo.ReadOnly = $true
     $rtbInfo.BorderStyle = "FixedSingle"
     $rtbInfo.BackColor = [System.Drawing.Color]::FromArgb(240, 244, 255)
@@ -707,7 +715,7 @@ $btnHubSettings.Add_Click({
 
     $infoLines = @(
         "## Apa itu Hub WS URL?"
-        "Alamat WebSocket server Go Hub yang berjalan di VPS/server kamu."
+        "Alamat WebSocket server Go Hub yang berjalan di VPS/server."
         "Semua printer di PC ini akan konek ke Hub yang sama."
         ""
         "## Format"
@@ -741,10 +749,9 @@ $btnHubSettings.Add_Click({
     }
     $hw.Controls.Add($rtbInfo)
 
-    # Input
     $lblURL = New-Object System.Windows.Forms.Label
     $lblURL.Text = "Hub WS URL :"
-    $lblURL.Location = New-Object System.Drawing.Point(14, 264)
+    $lblURL.Location = New-Object System.Drawing.Point(14, 284)
     $lblURL.Size = New-Object System.Drawing.Size(110, 28)
     $lblURL.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
     $lblURL.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 90)
@@ -752,18 +759,17 @@ $btnHubSettings.Add_Click({
     $hw.Controls.Add($lblURL)
 
     $txtHubURL = New-Object System.Windows.Forms.TextBox
-    $txtHubURL.Location = New-Object System.Drawing.Point(132, 264)
-    $txtHubURL.Size = New-Object System.Drawing.Size(440, 28)
+    $txtHubURL.Location = New-Object System.Drawing.Point(132, 284)
+    $txtHubURL.Size = New-Object System.Drawing.Size(458, 28)
     $txtHubURL.Font = New-Object System.Drawing.Font("Consolas", 10)
     $txtHubURL.BorderStyle = "FixedSingle"
     $txtHubURL.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 252)
     $txtHubURL.Text = $Script:currentHubURL
     $hw.Controls.Add($txtHubURL)
 
-    # Validation label
     $lblVal = New-Object System.Windows.Forms.Label
-    $lblVal.Location = New-Object System.Drawing.Point(132, 296)
-    $lblVal.Size = New-Object System.Drawing.Size(440, 20)
+    $lblVal.Location = New-Object System.Drawing.Point(132, 316)
+    $lblVal.Size = New-Object System.Drawing.Size(460, 20)
     $lblVal.Font = New-Object System.Drawing.Font("Segoe UI", 8)
     $lblVal.ForeColor = [System.Drawing.Color]::Gray
     $lblVal.Text = "Format: ws://IP_SERVER:8080/ws"
@@ -773,21 +779,20 @@ $btnHubSettings.Add_Click({
         $v = $txtHubURL.Text.Trim()
         if ($v -match "^ws://") {
             $lblVal.ForeColor = [System.Drawing.Color]::FromArgb(16, 130, 16)
-            $lblVal.Text = "  ✓ Format URL valid"
+            $lblVal.Text = "  OK — format URL valid"
         } elseif ($v -ne "") {
             $lblVal.ForeColor = [System.Drawing.Color]::FromArgb(190, 40, 30)
-            $lblVal.Text = "  ✗ Harus diawali ws://"
+            $lblVal.Text = "  SALAH — harus diawali ws://"
         } else {
             $lblVal.ForeColor = [System.Drawing.Color]::Gray
             $lblVal.Text = "  Format: ws://IP_SERVER:8080/ws"
         }
     })
 
-    # Buttons
     $btnHubSave = New-Object System.Windows.Forms.Button
     $btnHubSave.Text = "  Simpan"
-    $btnHubSave.Location = New-Object System.Drawing.Point(352, 340)
-    $btnHubSave.Size = New-Object System.Drawing.Size(100, 36)
+    $btnHubSave.Location = New-Object System.Drawing.Point(370, 370)
+    $btnHubSave.Size = New-Object System.Drawing.Size(110, 36)
     $btnHubSave.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnHubSave.FlatAppearance.BorderSize = 0
     $btnHubSave.BackColor = [System.Drawing.Color]::FromArgb(16, 130, 16)
@@ -798,8 +803,8 @@ $btnHubSettings.Add_Click({
 
     $btnHubCancel = New-Object System.Windows.Forms.Button
     $btnHubCancel.Text = "Batal"
-    $btnHubCancel.Location = New-Object System.Drawing.Point(460, 340)
-    $btnHubCancel.Size = New-Object System.Drawing.Size(80, 36)
+    $btnHubCancel.Location = New-Object System.Drawing.Point(488, 370)
+    $btnHubCancel.Size = New-Object System.Drawing.Size(90, 36)
     $btnHubCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnHubCancel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $btnHubCancel.ForeColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
@@ -810,19 +815,16 @@ $btnHubSettings.Add_Click({
         $url = $txtHubURL.Text.Trim()
         if ($url -eq "" -or -not ($url -match "^ws://")) {
             $lblVal.ForeColor = [System.Drawing.Color]::FromArgb(190, 40, 30)
-            $lblVal.Text = "  ✗ URL tidak valid — harus diawali ws://"
+            $lblVal.Text = "  URL tidak valid — harus diawali ws://"
             return
         }
         & '%s' savehub "$url" 2>&1 | Out-Null
         $Script:currentHubURL = $url
-        # Update hub status strip
         $lblHubStatus.Text = "  Hub WS: $url"
         $lblHubStatus.ForeColor = [System.Drawing.Color]::FromArgb(80, 220, 120)
-        # Update WS preview jika UUID sudah diisi
         $uuid = $txtUUID.Text.Trim()
         if ($uuid -ne "") {
-            $base = $url.TrimEnd('/')
-            $txtWSPreview.Text = $base + "?client_id=" + $uuid
+            $txtWSPreview.Text = $url.TrimEnd('/') + "?client_id=" + $uuid
             $txtWSPreview.ForeColor = [System.Drawing.Color]::FromArgb(0, 130, 0)
         }
         $hw.Close()
@@ -911,7 +913,6 @@ function GetConnArgs() {
     }
 }
 
-# Init panels
 UpdatePanels
 
 # ═══════════════════════════════════════════════════
@@ -921,26 +922,133 @@ $cboType.Add_SelectedIndexChanged({ UpdatePanels })
 $btnRefreshCOM.Add_Click({ LoadCOMPorts })
 $btnRefreshWin.Add_Click({ LoadWinPrinters })
 
+# ── Test Print — tampilkan detail error jika gagal ────
 $btnTest.Add_Click({
     $id = GetSelectedID
-    if ($id -lt 0) { ShowStatus "Select a printer first." $true; return }
+    if ($id -lt 0) { ShowStatus "Pilih printer terlebih dahulu." $true; return }
     $nm = $lvPrinters.SelectedItems[0].SubItems[1].Text
+    $conn = $lvPrinters.SelectedItems[0].SubItems[2].Text
+
     $lblStatus.ForeColor = $cBlue
-    $lblStatus.Text = "   Sending test print to '$nm'..."
+    $lblStatus.Text = "   Mengirim test print ke '$nm' ($conn)..."
     $form.Refresh()
+
     $r = & '%s' testprint "$id" 2>&1
-    if ($LASTEXITCODE -eq 0 -or "$r" -match "OK") {
-        ShowStatus "Test print sent to '$nm' — check the printer!" $false
+    $rStr = "$r".Trim()
+
+    if ($LASTEXITCODE -eq 0 -and ($rStr -match "OK" -or $rStr -eq "")) {
+        # Sukses
+        $selRow = $lvPrinters.SelectedItems[0]
+        $selRow.SubItems[4].Text = "✓ Test Print OK"
+        $selRow.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(16, 130, 16)
+        ShowStatus "Test print berhasil dikirim ke '$nm' — cek printer!" $false
     } else {
-        ShowStatus "Test print failed: $r" $true
+        # Gagal — tampilkan error detail
+        $selRow = $lvPrinters.SelectedItems[0]
+        $selRow.SubItems[4].Text = "✗ Test Print Gagal"
+        $selRow.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(190, 40, 30)
+
+        # Tampilkan popup error detail
+        $errForm = New-Object System.Windows.Forms.Form
+        $errForm.Text = "Test Print Gagal — $nm"
+        $errForm.Size = New-Object System.Drawing.Size(620, 360)
+        $errForm.StartPosition = "CenterParent"
+        $errForm.FormBorderStyle = "FixedDialog"
+        $errForm.MaximizeBox = $false
+        $errForm.MinimizeBox = $false
+        $errForm.BackColor = [System.Drawing.Color]::FromArgb(245, 246, 250)
+
+        $epnl = New-Object System.Windows.Forms.Panel
+        $epnl.Dock = "Top"; $epnl.Height = 48
+        $epnl.BackColor = [System.Drawing.Color]::FromArgb(190, 40, 30)
+        $elbl = New-Object System.Windows.Forms.Label
+        $elbl.Text = "  Test Print Gagal  —  $nm"
+        $elbl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 11)
+        $elbl.ForeColor = [System.Drawing.Color]::White
+        $elbl.Location = New-Object System.Drawing.Point(10, 10)
+        $elbl.Size = New-Object System.Drawing.Size(580, 28)
+        $epnl.Controls.Add($elbl)
+        $errForm.Controls.Add($epnl)
+
+        $ertb = New-Object System.Windows.Forms.RichTextBox
+        $ertb.Location = New-Object System.Drawing.Point(14, 58)
+        $ertb.Size = New-Object System.Drawing.Size(576, 216)
+        $ertb.ReadOnly = $true
+        $ertb.BorderStyle = "FixedSingle"
+        $ertb.BackColor = [System.Drawing.Color]::FromArgb(30, 20, 20)
+        $ertb.ForeColor = [System.Drawing.Color]::FromArgb(255, 120, 100)
+        $ertb.Font = New-Object System.Drawing.Font("Consolas", 9)
+        $ertb.ScrollBars = "Vertical"
+
+        $ertb.AppendText("Printer  : $nm" + [char]10)
+        $ertb.AppendText("Koneksi  : $conn" + [char]10)
+        $ertb.AppendText("" + [char]10)
+        $ertb.AppendText("Error Detail:" + [char]10)
+        $ertb.AppendText("─────────────────────────────────────" + [char]10)
+        if ($rStr -ne "") {
+            $ertb.AppendText($rStr + [char]10)
+        } else {
+            $ertb.AppendText("(Tidak ada output — kemungkinan printer tidak merespons)" + [char]10)
+        }
+        $ertb.AppendText("" + [char]10)
+        $ertb.AppendText("Tips:" + [char]10)
+        $ertb.SelectionColor = [System.Drawing.Color]::FromArgb(255, 200, 60)
+        $ertb.AppendText("- Pastikan IP/COM printer benar" + [char]10)
+        $ertb.AppendText("- Pastikan printer menyala dan tidak offline" + [char]10)
+        $ertb.AppendText("- Untuk Network: coba ping " + $conn + [char]10)
+        $ertb.AppendText("- Cek View Log untuk detail lebih lanjut" + [char]10)
+        $errForm.Controls.Add($ertb)
+
+        $eClose = New-Object System.Windows.Forms.Button
+        $eClose.Text = "Tutup"
+        $eClose.Location = New-Object System.Drawing.Point(490, 282)
+        $eClose.Size = New-Object System.Drawing.Size(100, 34)
+        $eClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $eClose.FlatAppearance.BorderSize = 0
+        $eClose.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+        $eClose.ForeColor = [System.Drawing.Color]::White
+        $eClose.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 9)
+        $eClose.Add_Click({ $errForm.Close() })
+        $errForm.Controls.Add($eClose)
+
+        ShowStatus "Test print GAGAL untuk '$nm' — lihat detail error." $true
+        $errForm.ShowDialog() | Out-Null
     }
+})
+
+# ── Refresh Status ────────────────────────────────────
+$btnRefreshSt.Add_Click({
+    $statResult = & '%s' getstatus 2>&1
+    # Baca file status JSON yang ditulis Go
+    $rows = $lvPrinters.Items
+    foreach ($row in $rows) {
+        $rid = [int]$row.Tag
+        $st = & '%s' getstatus "$rid" 2>&1
+        $stStr = "$st".Trim()
+        if ($stStr -match "connected") {
+            $row.SubItems[4].Text = "● Connected"
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(16, 130, 16)
+        } elseif ($stStr -match "error" -or $stStr -match "disconnected") {
+            $row.SubItems[4].Text = "✗ " + $stStr
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(190, 40, 30)
+        } elseif ($stStr -match "connecting") {
+            $row.SubItems[4].Text = "⟳ Connecting..."
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(210, 130, 0)
+        } elseif ($stStr -eq "" -or $stStr -eq "not found") {
+            $row.SubItems[4].Text = "? Tidak dikenal"
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::Gray
+        } else {
+            $row.SubItems[4].Text = $stStr
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::Gray
+        }
+    }
+    ShowStatus "Status diperbarui." $false
 })
 
 $btnEdit.Add_Click({
     $id = GetSelectedID
-    if ($id -lt 0) { ShowStatus "Select a printer to edit." $true; return }
+    if ($id -lt 0) { ShowStatus "Pilih printer untuk diedit." $true; return }
     $raw = & '%s' get "$id" 2>&1
-    # raw = "name|conntype|ip|port|com|baud|winprinter|uuid"
     $parts = "$raw" -split "\|"
     if ($parts.Count -ge 8) {
         $Script:editID = $id
@@ -960,28 +1068,28 @@ $btnEdit.Add_Click({
         $btnSave.BackColor = $cOrange
         $grp.Text = "  Edit Printer (ID: $id)"
         $lblStatus.ForeColor = $cOrange
-        $lblStatus.Text = "  Editing printer ID $id — modify fields and click Save Changes."
+        $lblStatus.Text = "  Editing printer ID $id — ubah field dan klik Save Changes."
     } else {
-        ShowStatus "Could not load printer: $raw" $true
+        ShowStatus "Tidak bisa load printer: $raw" $true
     }
 })
 
 $btnDelete.Add_Click({
     $id = GetSelectedID
-    if ($id -lt 0) { ShowStatus "Select a printer to delete." $true; return }
+    if ($id -lt 0) { ShowStatus "Pilih printer untuk dihapus." $true; return }
     $selRow = $lvPrinters.SelectedItems[0]
     $nm = $selRow.SubItems[1].Text
     $nl = [char]10
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Delete printer '$nm' (ID $id)?" + $nl + "This cannot be undone.",
-        "Confirm Delete",
+        "Hapus printer '$nm' (ID $id)?" + $nl + "Tindakan ini tidak bisa dibatalkan.",
+        "Konfirmasi Hapus",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Warning)
     if ($confirm -eq "Yes") {
         & '%s' delete "$id" 2>&1 | Out-Null
         $lvPrinters.Items.Remove($selRow)
         ClearForm
-        ShowStatus "Printer '$nm' removed." $false
+        ShowStatus "Printer '$nm' dihapus." $false
     }
 })
 
@@ -993,30 +1101,34 @@ $btnSave.Add_Click({
         $lblFrmStatus.Text = "  Printer Name dan UUID wajib diisi."
         return
     }
-    $args = GetConnArgs
+    $connArgs = GetConnArgs
     if ($Script:editID -ge 0) {
-        & '%s' edit "$($Script:editID)" "$name" "$($args[0])" "$($args[1])" "$($args[2])" "$($args[3])" "$($args[4])" "$($args[5])" "$uuid" 2>&1 | Out-Null
+        & '%s' edit "$($Script:editID)" "$name" "$($connArgs[0])" "$($connArgs[1])" "$($connArgs[2])" "$($connArgs[3])" "$($connArgs[4])" "$($connArgs[5])" "$uuid" 2>&1 | Out-Null
         $row = $lvPrinters.SelectedItems[0]
         if ($null -ne $row) {
-            $row.Text              = "$($Script:editID)"
+            $row.Text = "$($Script:editID)"
             $row.SubItems[1].Text = $name
-            $row.SubItems[2].Text = "$($args[0])://$($args[1])$($args[3])"
+            $row.SubItems[2].Text = "$($connArgs[0])://$($connArgs[1])$($connArgs[3])"
             $row.SubItems[3].Text = $uuid
+            $row.SubItems[4].Text = "⟳ Reconnecting..."
+            $row.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(210, 130, 0)
         }
         $lblFrmStatus.ForeColor = $cGreen
-        $lblFrmStatus.Text = "  Printer updated."
+        $lblFrmStatus.Text = "  Printer diperbarui."
         ClearForm
     } else {
-        & '%s' add "$name" "$($args[0])" "$($args[1])" "$($args[2])" "$($args[3])" "$($args[4])" "$($args[5])" "$uuid" 2>&1 | Out-Null
+        & '%s' add "$name" "$($connArgs[0])" "$($connArgs[1])" "$($connArgs[2])" "$($connArgs[3])" "$($connArgs[4])" "$($connArgs[5])" "$uuid" 2>&1 | Out-Null
         $newID = $lvPrinters.Items.Count
         $row = New-Object System.Windows.Forms.ListViewItem("$newID")
-        $row.SubItems.Add($name)                                        | Out-Null
-        $row.SubItems.Add("$($args[0])://$($args[1])$($args[3])")      | Out-Null
-        $row.SubItems.Add($uuid)                                        | Out-Null
+        $row.SubItems.Add($name) | Out-Null
+        $row.SubItems.Add("$($connArgs[0])://$($connArgs[1])$($connArgs[3])") | Out-Null
+        $row.SubItems.Add($uuid) | Out-Null
+        $row.SubItems.Add("⟳ Connecting...") | Out-Null
+        $row.SubItems[4].ForeColor = [System.Drawing.Color]::FromArgb(210, 130, 0)
         $row.Tag = $newID
         $lvPrinters.Items.Add($row) | Out-Null
         $lblFrmStatus.ForeColor = $cGreen
-        $lblFrmStatus.Text = "  Printer '$name' added!"
+        $lblFrmStatus.Text = "  Printer '$name' ditambahkan!"
         ClearForm
     }
 })
@@ -1026,13 +1138,17 @@ $lvPrinters.Add_DoubleClick({ $btnEdit.PerformClick() })
 
 $form.ShowDialog() | Out-Null
 `,
-		safeHubURL, safeHubURL, safeHubURL, // hub status strip: display, color check
-		listItems,
-		safeHubURL, // WS preview script variable
+		safeHubURL, // hub strip display
+		safeHubURL, // hub strip color check
+		safeHubURL, // hub strip color check 2
+		listItems,  // populate rows
+		safeHubURL, // WS preview script var
 		exePath,    // savehub
 		exePath,    // listcom
 		exePath,    // listprinters
 		exePath,    // testprint
+		exePath,    // refresh status (getstatus per id)
+		exePath,    // refresh status loop
 		exePath,    // get
 		exePath,    // delete
 		exePath,    // edit
@@ -1062,7 +1178,6 @@ func handleCLI(args []string) bool {
 	switch args[1] {
 
 	case "savehub":
-		// savehub <url>
 		if len(args) < 3 {
 			fmt.Println("usage: savehub <ws://host:port/ws>")
 			return true
@@ -1075,8 +1190,30 @@ func handleCLI(args []string) bool {
 		}
 		return true
 
+	case "getstatus":
+		// Kembalikan status WS client untuk printer ID tertentu
+		if len(args) < 3 {
+			// Tanpa argumen — print semua
+			statuses := wsManager.GetStatuses()
+			for id, st := range statuses {
+				fmt.Printf("%d: %s\n", id, st)
+			}
+			return true
+		}
+		id, err := strconv.Atoi(args[2])
+		if err != nil {
+			fmt.Println("invalid id")
+			return true
+		}
+		statuses := wsManager.GetStatuses()
+		if st, ok := statuses[id]; ok {
+			fmt.Println(st)
+		} else {
+			fmt.Println("not found")
+		}
+		return true
+
 	case "add":
-		// add <name> <conntype> <ip> <port> <com> <baud> <winprinter> <uuid>
 		if len(args) < 9 {
 			fmt.Println("usage: add <name> <conntype> <ip> <port> <com> <baud> <winprinter> <uuid>")
 			return true
@@ -1101,7 +1238,6 @@ func handleCLI(args []string) bool {
 		return true
 
 	case "edit":
-		// edit <id> <name> <conntype> <ip> <port> <com> <baud> <winprinter> <uuid>
 		if len(args) < 10 {
 			fmt.Println("usage: edit <id> <name> <conntype> <ip> <port> <com> <baud> <winprinter> <uuid>")
 			return true
@@ -1131,7 +1267,6 @@ func handleCLI(args []string) bool {
 		return true
 
 	case "get":
-		// returns "name|conntype|ip|port|com|baud|winprinter|uuid"
 		if len(args) < 3 {
 			fmt.Println("usage: get <id>")
 			return true
@@ -1187,10 +1322,11 @@ func handleCLI(args []string) bool {
 			return true
 		}
 		if err := sendTestPrint(id); err != nil {
+			// Tulis error detail ke stdout agar bisa ditangkap PowerShell
 			fmt.Println("Error:", err)
-		} else {
-			fmt.Println("Test print sent OK")
+			return true
 		}
+		fmt.Println("OK: Test print sent")
 		return true
 
 	case "listcom":
