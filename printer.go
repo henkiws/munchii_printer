@@ -330,7 +330,7 @@ func sendTestPrint(id int) error {
 	p.sizeNormal()
 	p.boldOff()
 	p.textln(sep)
-	p.textln("Kypesen Printer")
+	p.textln("Munchii Printer")
 	p.textln(sep)
 	p.alignLeft()
 	p.textln("Nama     : " + cfg.PrinterName)
@@ -545,9 +545,9 @@ func (o Order) GetSubtotal() float64 {
 	return o.OrderPrice - o.Vatvalue - o.TotalRefundPrice
 }
 
-// ── getKypesenBaseURL ─────────────────────────────────────────────────────────
+// ── getMunchiiBaseURL ─────────────────────────────────────────────────────────
 
-func getKypesenBaseURL(serverURL string) string {
+func getMunchiiBaseURL(serverURL string) string {
 	parts := strings.SplitN(serverURL, "/api/", 2)
 	if len(parts) == 2 {
 		return parts[0] + "/"

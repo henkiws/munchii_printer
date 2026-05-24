@@ -1,4 +1,4 @@
-# Kypesen Printer — Windows Tray App
+# Munchii Printer — Windows Tray App
 
 Aplikasi Windows yang berjalan di system tray untuk menerima job cetak secara **real-time via WebSocket** dari server Go Hub, lalu meneruskannya langsung ke printer ESC/POS via jaringan lokal.
 
@@ -23,7 +23,7 @@ Aplikasi Windows yang berjalan di system tray untuk menerima job cetak secara **
 │  PC KASIR / RESTORAN (Windows)                   │                 │
 │                                                  ▼                 │
 │  ┌───────────────────────────────────────────────────────────────┐ │
-│  │  kypesen-printer.exe (System Tray)                            │ │
+│  │  munchii-printer.exe (System Tray)                            │ │
 │  │                                                               │ │
 │  │  WSClient ──→ decode base64 ──→ EscPrinter ──→ TCP port 9100 │ │
 │  │  (per UUID)                                  (network/BT/USB) │ │
@@ -36,7 +36,7 @@ Aplikasi Windows yang berjalan di system tray untuk menerima job cetak secara **
 **Flow per job cetak:**
 1. Order masuk → Laravel `PrintController` jalankan `wkhtmltoimage` di server → hasilkan PNG
 2. PNG di-encode ke Base64 → di-push via HTTP POST ke Go Hub (`/api/push-print`)
-3. Go Hub forward payload ke `kypesen-printer.exe` yang terkoneksi (match by UUID)
+3. Go Hub forward payload ke `munchii-printer.exe` yang terkoneksi (match by UUID)
 4. `.exe` decode Base64 → gambar → ESC/POS bit-image → kirim TCP ke printer fisik
 
 > **Catatan:** Proses generate gambar sepenuhnya di server. PC kasir hanya terima, decode, dan cetak.
@@ -61,12 +61,12 @@ Aplikasi Windows yang berjalan di system tray untuk menerima job cetak secara **
 ## Struktur File
 
 ```
-kypesen-printer/
+munchii-printer/
 │
 ├── main.go                   ← Entry point + systray setup + tray menu event loop
 ├── websocket.go              ← WebSocket client (WSManager, WSClient, auto-reconnect,
 │                               parse payload, dispatch ke printer)
-├── kypesen.go                ← Struct payload JSON dari Go Hub (HubPayload, Order,
+├── munchii.go                ← Struct payload JSON dari Go Hub (HubPayload, Order,
 │                               NoteItem, ReportItem, dll)
 ├── printer.go                ← ESC/POS engine: koneksi Network/BT/USB, bitImage(),
 │                               sendTestPrint(), text fallback kitchen & cashier
@@ -84,7 +84,7 @@ kypesen-printer/
 ├── polling.go                ← [DEPRECATED] Digantikan websocket.go, dibiarkan kosong
 │
 ├── go.mod                    ← Dependencies Go
-├── build.bat                 ← Script build Windows → kypesen-printer.exe
+├── build.bat                 ← Script build Windows → munchii-printer.exe
 ├── versioninfo.json          ← Metadata EXE (versi, company, dll)
 └── app.manifest              ← Windows app manifest (DPI awareness, dll)
 ```
@@ -102,7 +102,7 @@ Inti dari sistem real-time. Berisi:
 - **`handleMessage()`** — parse JSON payload, dispatch ke `handleNotes()` / `handleReports()` / `handleOrders()`
 - **`printBase64Image()`** — decode Base64 → PNG → `bitImage()` → flush ke printer (dijalankan sebagai goroutine)
 
-#### `kypesen.go`
+#### `munchii.go`
 Definisi semua struct Go yang memetakan payload JSON dari Go Hub:
 - `HubPayload` — root payload (`status`, `from`, `client_id`, `ip_address`, `data`)
 - `HubData` — container untuk `Printer`, `Orders`, `Notes`, `Reports`
@@ -127,7 +127,7 @@ Manajemen konfigurasi printer:
 - Config disimpan di `printers.json` di folder yang sama dengan `.exe`
 
 #### `logger.go`
-- `logStatus(msg)` — tulis ke buffer memori (200 baris) + file `kypesen-printer.log`
+- `logStatus(msg)` — tulis ke buffer memori (200 baris) + file `munchii-printer.log`
 - `getRecentLogs(n)` — ambil N baris terakhir untuk ditampilkan di UI
 - `StartLogCleanup()` — goroutine yang jalan setiap 24 jam, hapus baris log > 1 bulan
 - Format timestamp: `[2006-01-02 15:04:05] LEVEL [context] pesan`
@@ -200,20 +200,20 @@ Manajemen konfigurasi printer:
 REM Buka folder project, double-click:
 build.bat
 
-REM Output: kypesen-printer.exe
+REM Output: munchii-printer.exe
 ```
 
 ### Build di Linux / Mac (cross-compile)
 
 ```bash
-cd kypesen-printer/
+cd munchii-printer/
 
 # Download dependency dulu
 go mod tidy
 
 # Cross-compile → Windows 64-bit
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-  go build -ldflags="-H windowsgui -s -w" -o kypesen-printer.exe .
+  go build -ldflags="-H windowsgui -s -w" -o munchii-printer.exe .
 ```
 
 ### Flag build yang dipakai
@@ -233,8 +233,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 ### Yang perlu dikopi ke PC target
 
 ```
-📁 folder bebas (misal C:\KypesenPrinter\)/
-└── kypesen-printer.exe    ← satu file ini saja
+📁 folder bebas (misal C:\MunchiiPrinter\)/
+└── Munchii-printer.exe    ← satu file ini saja
 ```
 
 > PC target **tidak perlu** install Go, PHP, wkhtmltoimage, atau apapun.
@@ -242,10 +242,10 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 
 ### Langkah pertama kali
 
-1. Double-click `kypesen-printer.exe`
+1. Double-click `munchii-printer.exe`
 2. Ikon printer muncul di system tray (pojok kanan bawah)
 3. Klik kanan → **Manage Printers** → tambah printer
-4. Isi `server_url` dengan URL API printer dari dashboard Kypesen (yang mengandung UUID)
+4. Isi `server_url` dengan URL API printer dari dashboard Munchii (yang mengandung UUID)
 5. Isi IP/COM sesuai jenis koneksi printer fisik
 
 ### Auto-start Windows
@@ -281,6 +281,6 @@ Klik kanan tray icon → centang **Auto-start dengan Windows**
 - Pastikan driver printer terinstall dan status Online
 
 **Log View:**
-- File log: `kypesen-printer.log` di folder yang sama dengan `.exe`
+- File log: `munchii-printer.log` di folder yang sama dengan `.exe`
 - Log otomatis dihapus setelah 1 bulan
 - Color-coding: 🟢 OK, 🔴 ERROR, 🟡 WARN, 🔵 INFO

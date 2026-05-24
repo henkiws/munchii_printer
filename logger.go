@@ -48,9 +48,9 @@ func getRecentLogs(n int) []string {
 func getLogPath() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "kypesen-printer.log"
+		return "munchii-printer.log"
 	}
-	return filepath.Join(filepath.Dir(exe), "kypesen-printer.log")
+	return filepath.Join(filepath.Dir(exe), "munchii-printer.log")
 }
 
 func writeLogFile(line string) {

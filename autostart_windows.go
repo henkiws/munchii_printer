@@ -10,7 +10,7 @@ import (
 )
 
 const regKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
-const appName = "KypesenPrinter"
+const appName = "MunchiiPrinter"
 
 func getExePath() string {
 	exe, err := os.Executable()

@@ -14,17 +14,55 @@ const (
 	ConnUSB       = "usb"       // USB via COM port (e.g. COM4) or Windows printer name
 )
 
+// ── Hub global config ─────────────────────────────────────────────────────────
+
+// HubConfig menyimpan konfigurasi Go Hub WebSocket server.
+// Disimpan di hub.json, berlaku untuk semua printer dalam satu instalasi.
+type HubConfig struct {
+	HubURL string `json:"hub_url"` // ws://SERVER_IP:8080/ws
+}
+
+func getHubConfigPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "hub.json"
+	}
+	return filepath.Join(filepath.Dir(exe), "hub.json")
+}
+
+func loadHubConfig() HubConfig {
+	path := getHubConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return HubConfig{HubURL: ""}
+	}
+	var cfg HubConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return HubConfig{HubURL: ""}
+	}
+	return cfg
+}
+
+func saveHubConfig(cfg HubConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "    ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getHubConfigPath(), data, 0644)
+}
+
+// ── Printer config ────────────────────────────────────────────────────────────
+
 type PrinterConfig struct {
 	ID               int    `json:"id"`
 	PrinterName      string `json:"printer_name"`
 	ConnType         string `json:"conn_type"`          // "network" | "bluetooth" | "usb"
 	PrinterIPAddress string `json:"printer_ip_address"` // used when ConnType == network
 	PrinterPort      int    `json:"printer_port"`       // TCP port, default 9100
-	COMPort          string `json:"com_port"`           // used when ConnType == bluetooth | usb  e.g. "COM3"
+	COMPort          string `json:"com_port"`           // used when ConnType == bluetooth | usb
 	BaudRate         int    `json:"baud_rate"`          // for COM port, default 9600
-	WindowsPrinter   string `json:"windows_printer"`    // Windows printer name for USB (alternative to COM)
-	ServerURL        string `json:"server_url"`
-	PollingTime      *int   `json:"polling_time"` // null = use default 5s
+	WindowsPrinter   string `json:"windows_printer"`    // Windows printer name for USB
+	PrinterUUID      string `json:"printer_uuid"`       // UUID unik per printer dari dashboard Munchii
 }
 
 // GetConnType returns conn type with fallback to "network"
@@ -53,14 +91,6 @@ func (p PrinterConfig) GetBaudRate() int {
 	return 9600
 }
 
-// GetPollingSeconds returns polling interval in seconds, default 5
-func (p PrinterConfig) GetPollingSeconds() int {
-	if p.PollingTime != nil && *p.PollingTime > 0 {
-		return *p.PollingTime
-	}
-	return 5
-}
-
 // ConnSummary returns a short human-readable connection string for the UI
 func (p PrinterConfig) ConnSummary() string {
 	switch p.GetConnType() {
@@ -76,6 +106,8 @@ func (p PrinterConfig) ConnSummary() string {
 	}
 	return "unknown"
 }
+
+// ── File helpers ──────────────────────────────────────────────────────────────
 
 func getConfigPath() string {
 	exe, err := os.Executable()

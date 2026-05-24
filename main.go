@@ -9,55 +9,44 @@ import (
 )
 
 func main() {
-	// CLI mode: dipanggil dari PowerShell UI
 	if len(os.Args) > 1 && handleCLI(os.Args) {
 		return
 	}
-
-	// Normal mode: tray app
 	systray.Run(onReady, onExit)
 }
 
 func onReady() {
 	systray.SetIcon(getIconBytes())
-	systray.SetTitle("Kypesen Printer")
-	systray.SetTooltip("Kypesen Printer — starting...")
+	systray.SetTitle("Munchii Printer")
+	systray.SetTooltip("Munchii Printer — starting...")
 
-	// ── Menu ──────────────────────────────────────────────────────────────────
 	mStatus := systray.AddMenuItem("● Starting...", "Status koneksi")
 	mStatus.Disable()
-
 	systray.AddSeparator()
-
-	mManage  := systray.AddMenuItem("⚙   Manage Printers", "Tambah, edit, atau hapus printer")
+	mManage := systray.AddMenuItem("⚙   Manage Printers", "Tambah, edit, atau hapus printer")
 	mViewLog := systray.AddMenuItem("📋  View Log", "Lihat aktivitas terakhir")
-
 	systray.AddSeparator()
-
 	mAutoStart := systray.AddMenuItemCheckbox(
 		"🔄  Auto-start dengan Windows",
 		"Jalankan otomatis saat login Windows",
 		isAutoStartEnabled(),
 	)
-
 	systray.AddSeparator()
 	mExit := systray.AddMenuItem("✖   Exit", "Hentikan dan keluar")
 
-	// ── Startup ───────────────────────────────────────────────────────────────
-	StartLogCleanup() // auto-cleanup log > 1 bulan
+	StartLogCleanup()
 
 	printers, err := loadPrinters()
 	if err != nil {
 		logStatus("ERROR Gagal load printers: " + err.Error())
 	} else if len(printers) == 0 {
 		logStatus("WARN Belum ada printer dikonfigurasi. Gunakan Manage Printers.")
-		systray.SetTooltip("Kypesen Printer — belum ada printer")
+		systray.SetTooltip("Munchii Printer — belum ada printer")
 	}
 
 	wsManager.StartAll()
 	updateStatus(mStatus)
 
-	// ── Event loop ────────────────────────────────────────────────────────────
 	go func() {
 		for {
 			select {
@@ -67,10 +56,8 @@ func onReady() {
 					wsManager.Restart()
 					updateStatus(mStatus)
 				}()
-
 			case <-mViewLog.ClickedCh:
 				openLogWindow()
-
 			case <-mAutoStart.ClickedCh:
 				if mAutoStart.Checked() {
 					mAutoStart.Uncheck()
@@ -81,7 +68,6 @@ func onReady() {
 					registerAutoStart()
 					logStatus("INFO Auto-start diaktifkan")
 				}
-
 			case <-mExit.ClickedCh:
 				wsManager.StopAll()
 				systray.Quit()
@@ -92,14 +78,14 @@ func onReady() {
 }
 
 func onExit() {
-	logStatus("INFO Kypesen Printer keluar")
+	logStatus("INFO Munchii Printer keluar")
 }
 
 func updateStatus(mStatus *systray.MenuItem) {
 	printers, err := loadPrinters()
 	if err != nil || len(printers) == 0 {
 		mStatus.SetTitle("● Belum ada printer")
-		systray.SetTooltip("Kypesen Printer — belum ada printer")
+		systray.SetTooltip("Munchii Printer — belum ada printer")
 		return
 	}
 
@@ -130,9 +116,9 @@ func updateStatus(mStatus *systray.MenuItem) {
 	mStatus.SetTitle(title)
 
 	if allOK {
-		systray.SetTooltip(fmt.Sprintf("Kypesen Printer — %d printer(s) OK", len(printers)))
+		systray.SetTooltip(fmt.Sprintf("Munchii Printer — %d printer(s) OK", len(printers)))
 	} else {
-		systray.SetTooltip("Kypesen Printer — ada printer terputus!")
+		systray.SetTooltip("Munchii Printer — ada printer terputus!")
 	}
 }
 
@@ -143,13 +129,11 @@ func openLogWindow() {
 		content = "(Belum ada log)"
 	}
 
-	// Color-code log levels untuk tampilan
-	// OK → hijau, ERROR → merah, WARN → kuning, INFO → abu
 	ps := fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Kypesen Printer - Activity Log"
+$form.Text = "Munchii Printer - Activity Log"
 $form.Size = New-Object System.Drawing.Size(900, 600)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
@@ -159,7 +143,7 @@ $pnlTitle.Dock = "Top"
 $pnlTitle.Height = 48
 $pnlTitle.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 35)
 $lbl = New-Object System.Windows.Forms.Label
-$lbl.Text = "  Activity Log  (100 baris terakhir — log disimpan 1 bulan)"
+$lbl.Text = "  Activity Log  (100 baris terakhir)"
 $lbl.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
 $lbl.ForeColor = [System.Drawing.Color]::FromArgb(255, 180, 0)
 $lbl.Location = New-Object System.Drawing.Point(10, 12)
@@ -197,10 +181,6 @@ $rtb.ScrollToCaret()
 $form.ShowDialog() | Out-Null
 `, content)
 
-	runPS(ps)
-}
-
-func runPS(script string) {
-	cmd := newPSCommand(script)
+	cmd := newPSCommand(ps)
 	cmd.Start()
 }

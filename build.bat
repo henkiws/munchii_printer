@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo  Kypesen Printer - Build Script
+echo  Munchii Printer - Build Script
 echo ============================================
 echo.
 
@@ -28,11 +28,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Building kypesen-printer.exe...
+echo Building munchii-printer.exe...
 set GOOS=windows
 set GOARCH=amd64
 set CGO_ENABLED=0
-go build -ldflags="-H windowsgui -s -w" -o kypesen-printer.exe .
+go build -ldflags="-H windowsgui -s -w" -o munchii-printer.exe .
 if errorlevel 1 (
     echo.
     echo ERROR: Build gagal — lihat error di atas
@@ -45,10 +45,10 @@ echo ============================================
 echo  BUILD SUKSES!
 echo ============================================
 echo.
-echo Output: kypesen-printer.exe
+echo Output: munchii-printer.exe
 echo.
 echo Yang perlu dikopi ke PC target:
-echo   kypesen-printer.exe   ^<-- satu file ini saja
+echo   munchii-printer.exe   ^<-- satu file ini saja
 echo.
 echo PC target TIDAK perlu:
 echo   - wkhtmltoimage.exe  (generate gambar di server)

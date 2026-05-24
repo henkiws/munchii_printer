@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
-	"bytes"
 	"net"
 	"strings"
 	"sync"
@@ -28,19 +28,17 @@ const (
 // ── Manager ───────────────────────────────────────────────────────────────────
 
 // WSManager mengelola satu WebSocket connection per printer UUID.
-// Setiap printer config punya server_url yang mengandung UUID → dipakai
-// sebagai client_id ke Go Hub.
 type WSManager struct {
 	mu      sync.Mutex
 	clients map[int]*WSClient // key: printer config ID
 }
 
 type WSClient struct {
-	cfg      PrinterConfig
-	hubURL   string // ws://host:port/ws?client_id=UUID
-	stopCh   chan struct{}
-	status   string
-	mu       sync.Mutex
+	cfg    PrinterConfig
+	hubURL string // ws://SERVER:8080/ws?client_id=UUID
+	stopCh chan struct{}
+	status string
+	mu     sync.Mutex
 }
 
 var wsManager = &WSManager{
@@ -69,9 +67,9 @@ func (m *WSManager) Start(cfg PrinterConfig) {
 		delete(m.clients, cfg.ID)
 	}
 
-	hubURL := buildHubWSURL(cfg.ServerURL)
+	hubURL := buildHubWSURL(cfg)
 	if hubURL == "" {
-		logStatus(fmt.Sprintf("ERROR [%s] Tidak bisa build WS URL dari: %s", cfg.PrinterName, cfg.ServerURL))
+		logStatus(fmt.Sprintf("ERROR [%s] Hub WS URL kosong — isi Hub Settings dan UUID printer terlebih dahulu", cfg.PrinterName))
 		return
 	}
 
@@ -129,30 +127,22 @@ func (c *WSClient) setStatus(s string) {
 
 // ── URL Builder ───────────────────────────────────────────────────────────────
 
-// buildHubWSURL mengekstrak host dari server_url Laravel lalu membuat
-// WebSocket URL ke Go Hub.
-// Contoh: "http://192.168.1.10:8001/api/v1/print/UUID-XXX"
-//      → "ws://192.168.1.10:8080/ws?client_id=UUID-XXX"
-func buildHubWSURL(serverURL string) string {
-	// Ekstrak UUID dari akhir path
-	parts := strings.Split(strings.TrimRight(serverURL, "/"), "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	uuid := parts[len(parts)-1]
-	if uuid == "" {
+// buildHubWSURL membangun WebSocket URL ke Go Hub dari HubConfig global + UUID printer.
+// Contoh hasil: ws://123.45.67.89:8080/ws?client_id=UUID-XXX
+func buildHubWSURL(cfg PrinterConfig) string {
+	if cfg.PrinterUUID == "" {
 		return ""
 	}
 
-	// Ekstrak host (tanpa port Laravel)
-	// serverURL = "http://host:laravelPort/..."
-	noScheme := strings.TrimPrefix(serverURL, "https://")
-	noScheme = strings.TrimPrefix(noScheme, "http://")
-	hostPart := strings.SplitN(noScheme, "/", 2)[0]
-	host := strings.SplitN(hostPart, ":", 2)[0] // buang port Laravel
+	hub := loadHubConfig()
+	if hub.HubURL == "" {
+		return ""
+	}
 
-	// Go Hub selalu di port 8080
-	return fmt.Sprintf("ws://%s:8080/ws?client_id=%s", host, uuid)
+	// Pastikan HubURL tidak ada trailing slash
+	base := strings.TrimRight(hub.HubURL, "/")
+
+	return fmt.Sprintf("%s?client_id=%s", base, cfg.PrinterUUID)
 }
 
 // ── WebSocket run loop (auto-reconnect) ───────────────────────────────────────
@@ -177,7 +167,7 @@ func (c *WSClient) run() {
 			case <-c.stopCh:
 				return
 			}
-			delay = min(delay*2, wsReconnectMaxDelay)
+			delay = minDuration(delay*2, wsReconnectMaxDelay)
 		}
 
 		c.setStatus(fmt.Sprintf("connecting (attempt #%d)", attempt))
@@ -210,7 +200,7 @@ func (c *WSClient) connect() error {
 	defer conn.Close()
 
 	c.setStatus("connected")
-	logStatus(fmt.Sprintf("OK [%s] Terhubung ke Hub ✓", c.cfg.PrinterName))
+	logStatus(fmt.Sprintf("OK [%s] Terhubung ke Hub ✓ (%s)", c.cfg.PrinterName, c.hubURL))
 
 	// Ping/pong keepalive
 	conn.SetPongHandler(func(appData string) error {
@@ -308,12 +298,8 @@ func (c *WSClient) handleNotes(p HubPayload) {
 			logStatus(fmt.Sprintf("WARN [%s] Note[%d] image_base64 kosong, skip", c.cfg.PrinterName, i))
 			continue
 		}
-		ip := p.IPAddress
-		if ip == "" {
-			ip = c.cfg.PrinterIPAddress
-		}
-		logStatus(fmt.Sprintf("INFO [%s] Print note[%d] → %s:%d", c.cfg.PrinterName, i, ip, c.cfg.GetPort()))
-		go c.printBase64Image(ip, b64, fmt.Sprintf("note[%d]", i))
+		logStatus(fmt.Sprintf("INFO [%s] Print note[%d] → %s", c.cfg.PrinterName, i, c.cfg.ConnSummary()))
+		go c.printBase64Image(b64, fmt.Sprintf("note[%d]", i))
 	}
 }
 
@@ -330,12 +316,8 @@ func (c *WSClient) handleReports(p HubPayload) {
 			logStatus(fmt.Sprintf("WARN [%s] Report[%d] image_base64 kosong, skip", c.cfg.PrinterName, i))
 			continue
 		}
-		ip := p.IPAddress
-		if ip == "" {
-			ip = c.cfg.PrinterIPAddress
-		}
-		logStatus(fmt.Sprintf("INFO [%s] Print report[%d] → %s:%d", c.cfg.PrinterName, i, ip, c.cfg.GetPort()))
-		go c.printBase64Image(ip, b64, fmt.Sprintf("report[%d]", i))
+		logStatus(fmt.Sprintf("INFO [%s] Print report[%d] → %s", c.cfg.PrinterName, i, c.cfg.ConnSummary()))
+		go c.printBase64Image(b64, fmt.Sprintf("report[%d]", i))
 	}
 }
 
@@ -352,19 +334,15 @@ func (c *WSClient) handleOrders(p HubPayload) {
 			logStatus(fmt.Sprintf("WARN [%s] Order[%d] image_base64 kosong, skip", c.cfg.PrinterName, i))
 			continue
 		}
-		ip := p.IPAddress
-		if ip == "" {
-			ip = c.cfg.PrinterIPAddress
-		}
 		label := fmt.Sprintf("order[%d] id=%d", i, ow.Order.ID)
-		logStatus(fmt.Sprintf("INFO [%s] Print %s → %s:%d", c.cfg.PrinterName, label, ip, c.cfg.GetPort()))
-		go c.printBase64Image(ip, b64, label)
+		logStatus(fmt.Sprintf("INFO [%s] Print %s → %s", c.cfg.PrinterName, label, c.cfg.ConnSummary()))
+		go c.printBase64Image(b64, label)
 	}
 }
 
-// ── Core: decode base64 → PNG → ESC/POS bitimage → TCP 9100 ──────────────────
+// ── Core: decode base64 → PNG → ESC/POS bitimage → printer ───────────────────
 
-func (c *WSClient) printBase64Image(printerIP, b64data, label string) {
+func (c *WSClient) printBase64Image(b64data, label string) {
 	start := time.Now()
 
 	// 1. Strip data URI prefix jika ada (data:image/png;base64,...)
@@ -425,10 +403,8 @@ func (c *WSClient) printBase64Image(printerIP, b64data, label string) {
 		c.cfg.PrinterName, label, c.cfg.ConnSummary(), elapsed.Round(time.Millisecond)))
 }
 
-// ── TCP direct fallback (jika newPrinterFromConfig tidak dipakai) ─────────────
+// ── TCP direct fallback ───────────────────────────────────────────────────────
 
-// dialPrinterTCP membuka raw TCP ke printer ESC/POS port 9100.
-// Dipakai sebagai fallback eksplisit jika perlu.
 func dialPrinterTCP(ip string, port int) (net.Conn, error) {
 	addr := fmt.Sprintf("%s:%d", ip, port)
 	conn, err := net.DialTimeout("tcp", addr, printTCPTimeout)
@@ -440,7 +416,7 @@ func dialPrinterTCP(ip string, port int) (net.Conn, error) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func min(a, b time.Duration) time.Duration {
+func minDuration(a, b time.Duration) time.Duration {
 	if a < b {
 		return a
 	}
